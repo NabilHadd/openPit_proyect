@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Entornos y variables de entorno
+.venv/
+venv/
+.env
+
+# IDEs / SO
+.vscode/
+.idea/
+.DS_Store
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Datos (se conserva la estructura con .gitkeep)
+data/raw/*
+data/processed/*
+!data/**/.gitkeep
+
+# Artefactos generados (se conserva la estructura con .gitkeep)
+artifacts/plots/*
+artifacts/reports/*
+artifacts/checkpoints/*
+!artifacts/**/.gitkeep
