@@ -1,0 +1,1 @@
+# openPit_proyect
