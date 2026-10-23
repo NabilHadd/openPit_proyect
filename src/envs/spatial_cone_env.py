@@ -47,7 +47,8 @@ class SpatialConeEnv(MineEnv):
         return self.spatial.max_steps
 
     def reset(self, *, training: bool = True) -> SpatialState:
-        self.state = SpatialState(frozenset(), 0, 0.0, False, None, self.spatial.max_steps,
+        clock = self.spatial.max_steps if self.spatial.horizon_mode == "finite" else 0
+        self.state = SpatialState(frozenset(), 0, 0.0, False, None, clock,
                                   "learning" if training else "construction")
         self.plan = Plan()
         self.action_history = ()
@@ -109,11 +110,11 @@ class SpatialConeEnv(MineEnv):
             used += self._usage(new_blocks)
         plan = Plan(self.plan.extractions + tuple(Extraction(i, period) for i in new_blocks))
         extracted = state.extracted | frozenset(new_blocks)
-        steps_left = state.steps_left - 1
+        steps_left = state.steps_left - 1 if self.spatial.horizon_mode == "finite" else 0
         if reason is None:
             if len(extracted) == len(self.blocks):
                 reason = "all_extracted"
-            elif steps_left == 0:
+            elif self.spatial.horizon_mode == "finite" and steps_left == 0:
                 reason = "step_limit"
         next_state = SpatialState(extracted, period, used, reason is not None, position, steps_left, state.phase)
         self.plan, self.state = plan, next_state

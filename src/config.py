@@ -52,6 +52,7 @@ class SpatialParameters:
     surface: str
     max_steps: int = 500
     construction_up: bool = False
+    horizon_mode: str = "finite"
 
     def __post_init__(self):
         if self.surface not in {"min-z", "max-z"}:
@@ -60,3 +61,5 @@ class SpatialParameters:
             raise ValueError("max_steps debe ser un entero positivo")
         if not isinstance(self.construction_up, bool):
             raise ValueError("construction_up debe ser booleano")
+        if self.horizon_mode not in {"finite", "external"}:
+            raise ValueError("horizon_mode debe ser finite o external")

@@ -262,6 +262,27 @@ que la aprobación minera y compatibilidad del formato del cliente están pendie
 
 ## Continuidad
 
+### Validación por etapas y presupuesto de transiciones
+
+Nuevo punto de entrada aislado, sin cambiar los defaults de `main.py`:
+
+```bash
+# Mina de seis bloques, oráculo exhaustivo independiente, diez semillas.
+python -B -m src.validation --transitions 10000 --evaluation-rollouts 20
+```
+
+Con gamma=1 y estado exacto, la mina pequeña pasó **200/200 evaluaciones de política
+final** (óptimo 15), no solo una búsqueda de un prefijo afortunado. Incluye desempate
+uniforme con RNG de evaluación separado, presupuesto exacto de transiciones y
+distinción entre Stop, horizonte terminal y truncamiento externo.
+
+En 105 bloques, 100.000 transiciones por cada una de diez semillas: **336.000 observado
+en 4/10 semillas** y reproducido en 30/200 evaluaciones de política final. Aún no es una
+política robusta: los aciertos de evaluación se concentran en dos semillas.
+
+Contrato del entorno, límites de cada interpretación, comandos para el Excel y
+resultados: [`docs/learning_validation.md`](docs/learning_validation.md).
+
 ### Controles experimentales VAN 2×2 (no modelo final)
 
 La rama `optimizacion-van` incorpora un modo separado para comparar posición/período

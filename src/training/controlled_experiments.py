@@ -42,6 +42,8 @@ def validate_controls(problem: ProblemParameters, spatial: SpatialParameters, se
         raise ValueError("La suite reducida requiere un período sin capacidad ni descuento")
     if not spatial.construction_up:
         raise ValueError("El control exige seis direcciones idénticas en aprendizaje y evaluación")
+    if spatial.horizon_mode != "finite":
+        raise ValueError("Los controles históricos requieren el horizonte finito original")
     if not seeds or len(set(seeds)) != len(seeds):
         raise ValueError("Se requieren semillas distintas y una lista no vacía")
     if any(isinstance(seed, bool) or not isinstance(seed, int) for seed in seeds):

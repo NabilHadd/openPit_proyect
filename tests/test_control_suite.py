@@ -79,6 +79,7 @@ class ControlledRunnerTests(unittest.TestCase):
         mine = toy_mine()
         for problem, spatial, seeds in (
             (ProblemParameters(), SpatialParameters("max-z", 10, False), (0,)),
+            (ProblemParameters(), SpatialParameters("max-z", 10, True, "external"), (0,)),
             (ProblemParameters(capacity=1), SpatialParameters("max-z", 10, True), (0,)),
             (ProblemParameters(), SpatialParameters("max-z", 10, True), (0, 0)),
         ):

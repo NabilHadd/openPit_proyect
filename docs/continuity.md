@@ -1,4 +1,49 @@
-# Continuidad — controles experimentales (2026-10-23)
+# Continuidad — validación por etapas (2026-10-23)
+
+## Trabajo posterior a los cuatro controles
+
+El usuario guardó y publicó los controles anteriores en `8e20087`. Después pidió:
+validar el entorno; resolver una mina diminuta por enumeración y aprendizaje;
+revisar empates/Stop/truncamientos/cobertura; y consolidar gamma=1 con diez semillas
+y presupuestos iguales de transiciones. No convertirlo automáticamente en modelo final.
+
+- Nuevo CLI aislado: `python -B -m src.validation --transitions 10000`.
+- Pruebas exhaustivas del contrato físico con capacidad, períodos y descuento.
+  Se comprobaron también 20.684 transiciones reales guardadas, sin duplicación,
+  infracción de precedencias ni discrepancia entre recompensa y VAN.
+- Oráculo independiente de seis bloques: óptimo alcanzable 15, requiere pérdida
+  intermedia −5 y evitar pérdidas opcionales. No entra al agente.
+- Con horizonte finito 12, semillas 0…9 y 10.000 transiciones por semilla: **200/200
+  rollouts finales óptimos**; el test automatizado también lo exige en cuatro bloques.
+- Desempate uniforme de evaluación con RNG separado; mejor observado solo de
+  aprendizaje, mejor episodio completo y distribución de políticas separados.
+- Horizonte `finite` sigue predeterminado. `external` usa reloj estacionario y
+  truncamientos con bootstrap; **no son el mismo problema**. Un piloto external con
+  límite 12 no reprodujo el óptimo en todos los rollouts: ciclos gratuitos gamma=1,
+  no una prueba superada que deba escalarse sin más.
+- Protocolo, artefactos y comandos: [`learning_validation.md`](learning_validation.md).
+- Comparación real terminada: 100.000 transiciones por semilla 0…9, gamma=1, alpha=1,
+  epsilon=0,3, horizonte finito 500 y 20 evaluaciones por semilla. **336.000 observado
+  en 4/10 semillas** (2,4,7,9); episodios completos óptimos en 3/10; política final
+  30/200 aciertos, solo semillas 2 (16/20) y 9 (14/20). Media 305.250. Ninguna semilla
+  reproduce el óptimo en todos sus rollouts. Los 200 terminan por Stop, no horizonte.
+- Reproducidos y verificados 10 mejores prefijos y 200 políticas; los 34 óptimos contienen
+  los 42 positivos sin negativos. Referencia revalidada post hoc; Excel original intacto.
+  Artefactos: `artifacts/reports/20261023T193418-learning-validation-aba1d7d5/`.
+- Ablación con las mismas Q: ordered agota 500 pasos en 10/10, media 315.000; uniform
+  media 305.250 y 200/200 Stop. Corregir sesgo de orden no asegura mejorar VAN.
+  Los Stop uniformes siempre fueron empates; no atribuirlos sin más a parada aprendida.
+- La revisión independiente detectó y motivó dos regresiones nuevas: el oráculo
+  external no puede usar el corte del recolector como horizonte del problema, y un
+  rollout truncado con valor óptimo no puede pasar la puerta de política completada.
+- Suite ampliada: 85 pruebas en total, con integración privada opcional. Comando:
+  `python -B -m unittest discover -s tests -v`. Las nuevas funciones no cambian los
+  defaults de `main.py`, ni recompensas, negativos o acciones de los controles guardados.
+  Con el Excel habilitado pasaron 85/85; inspecciones IDE sin errores y Graphify actualizado.
+  Puerta diminuta estricta reejecutada: `20261023T194311-learning-validation-e2e0c9b1`,
+  200/200 políticas completadas óptimas y las diez Q idénticas a la corrida inicial.
+
+## Registro anterior — controles experimentales
 
 ## Rama y último trabajo
 
