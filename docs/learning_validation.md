@@ -4,6 +4,24 @@ Protocolo **experimental**, separado de `main.py train` y de los cuatro controle
 históricos. No es un modelo final, una réplica confirmada del paper ni una garantía
 de escalabilidad. Solo usa biblioteca estándar y la dependencia existente `openpyxl`.
 
+## Responsabilidades del protocolo
+
+- `src/validation.py`: entrada CLI y composición de la configuración.
+- `src/training/validation_suite.py`: ciclo de semillas, estado running/completed/failed
+  y orden de ejecución. Acepta `trainer`, `benchmark` y `store` como dependencias
+  opcionales; el benchmark se invoca solo después de exportar todas las semillas.
+- `src/evaluation/validation_report.py`: proyección estadística por semilla, gaps,
+  cobertura y resumen. No entrena, calcula el oráculo ni escribe archivos.
+- `src/evaluation/validation_artifacts.py`: adaptador de archivos que reutiliza el
+  serializador y el verificador existentes. Su contrato tiene solo `start_suite`,
+  `save_run` y `write_report`; no conserva modelos entre semillas.
+
+La función Python `run_validation_suite` se importa ahora desde
+`src.training.validation_suite`, no desde `src.evaluation.validation_report`.
+El comando CLI, las reglas científicas y los formatos de salida no cambian. La
+separación permite probar estadísticas sin entrenar ni usar disco y sustituir los
+colaboradores de la suite sin modificar su secuenciación.
+
 ## 1. Contrato del entorno
 
 `tests/test_environment_contract.py` recorre todos los estados alcanzables de una

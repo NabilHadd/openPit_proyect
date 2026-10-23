@@ -1,5 +1,23 @@
 # Continuidad — validación por etapas (2026-10-23)
 
+## Refactor de responsabilidades
+
+Tras el commit del usuario `79d04bb`, se separó el antiguo orquestador ubicado en
+`src/evaluation/validation_report.py`: estadísticas en ese módulo, ciclo de semillas
+en `src/training/validation_suite.py` y persistencia en
+`src/evaluation/validation_artifacts.py`. La suite acepta entrenamiento, benchmark
+y almacenamiento inyectables, con un contrato de almacenamiento de tres operaciones.
+
+El CLI importa la suite desde training; la ruta Python anterior se reemplazó y está
+documentada en `learning_validation.md`. No cambian entrenamiento, esquema JSON,
+exportaciones, estados/errores ni orden post hoc. Se compararon 60 archivos JSON
+contra capturas anteriores (finite, external, mina grande y fallo de semilla),
+ignorando solo procedencia de código y tiempos: todos equivalentes.
+Verificación del refactor: 98/98 pruebas con el Excel habilitado; sin él pasan 97
+y se omite la integración privada. Se añadieron pruebas estadísticas sin modelo ni
+disco, de dependencias inyectadas, errores de escritura/exportación, orden post hoc
+y liberación del modelo anterior. Revisión estática independiente sin hallazgos.
+
 ## Trabajo posterior a los cuatro controles
 
 El usuario guardó y publicó los controles anteriores en `8e20087`. Después pidió:

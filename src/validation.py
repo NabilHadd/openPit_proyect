@@ -7,8 +7,8 @@ from src.config import LearningParameters, SpatialParameters, project_path
 from src.data.dataset import load_mine
 from src.data.transforms import grid9_z_down, grid9_z_up, load_precedences
 from src.evaluation.tiny_oracle import tiny_mine
-from src.evaluation.validation_report import run_validation_suite
 from src.training.validation_runner import ValidationBudget
+from src.training.validation_suite import run_validation_suite
 
 
 def parser():

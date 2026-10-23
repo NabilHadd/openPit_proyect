@@ -4,19 +4,25 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch
+import weakref
+from unittest.mock import Mock, patch
 
 from src import validation
-from src.evaluation.tiny_oracle import enumerate_tiny
+from src.config import LearningParameters, SpatialParameters
+from src.evaluation.tiny_oracle import tiny_mine
 from src.models.validated_q_learning import ValidationQLearning
-from src.training.validation_runner import train_transition_budget
+from src.training.validation_runner import ValidationBudget, train_transition_budget
+from src.training.validation_suite import evaluate_validation_benchmark, run_validation_suite
 
 
 class ValidationSuiteTests(unittest.TestCase):
+    def run_suite(self, output, *, transitions=10, evaluation_rollouts=20, seeds=(0, 1), **dependencies):
+        mine, rules = tiny_mine()
+        return run_validation_suite(mine, rules, SpatialParameters("max-z", 12, True), LearningParameters(alpha=1),
+                                    seeds, ValidationBudget(transitions, evaluation_rollouts), Path(output), **dependencies)
+
     def test_posthoc_oracle_transition_budgets_coverage_and_experimental_exports(self):
         with tempfile.TemporaryDirectory() as temporary:
-            args = validation.parser().parse_args(["--transitions", "501", "--seeds", "0", "1",
-                                                    "--evaluation-rollouts", "3", "--output", temporary])
             completed = []
             def tracked(*args, **kwargs):
                 run = train_transition_budget(*args, **kwargs)
@@ -24,10 +30,8 @@ class ValidationSuiteTests(unittest.TestCase):
                 return run
             def oracle(*args, **kwargs):
                 self.assertEqual(completed, [0, 1])
-                return enumerate_tiny(*args, **kwargs)
-            with patch("src.evaluation.validation_report.train_transition_budget", tracked), \
-                    patch("src.evaluation.validation_report.enumerate_tiny", oracle), redirect_stdout(io.StringIO()):
-                directory = validation.execute(args)
+                return evaluate_validation_benchmark(*args, **kwargs)
+            directory = self.run_suite(temporary, transitions=501, evaluation_rollouts=3, trainer=tracked, benchmark=oracle)
             report = json.loads((directory / "report.json").read_text())
             self.assertEqual(report["status"], "completed")
             self.assertEqual(report["benchmark"]["optimum"], 15)
@@ -49,19 +53,41 @@ class ValidationSuiteTests(unittest.TestCase):
 
     def test_failed_seed_does_not_compute_oracle_or_partial_success(self):
         with tempfile.TemporaryDirectory() as temporary:
-            args = validation.parser().parse_args(["--transitions", "10", "--seeds", "0", "1", "--output", temporary])
             def failing(*args, **kwargs):
                 if args[4] == 1:
                     raise RuntimeError("controlled failure")
                 return train_transition_budget(*args, **kwargs)
-            with patch("src.evaluation.validation_report.train_transition_budget", failing), \
-                    patch("src.evaluation.validation_report.enumerate_tiny") as oracle:
-                with self.assertRaisesRegex(RuntimeError, "controlled failure"):
-                    validation.execute(args)
-                oracle.assert_not_called()
+            oracle = Mock()
+            with self.assertRaisesRegex(RuntimeError, "controlled failure"):
+                self.run_suite(temporary, trainer=failing, benchmark=oracle)
+            oracle.assert_not_called()
             report = json.loads(next(Path(temporary).glob("*/report.json")).read_text())
             self.assertEqual(report["status"], "failed")
             self.assertEqual(report["completed_runs"], 1)
+            self.assertNotIn("summary", report)
+
+    def test_previous_model_is_released_before_training_the_next_seed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            models = []
+            def tracked(*args, **kwargs):
+                if models:
+                    self.assertIsNone(models[-1]())
+                run = train_transition_budget(*args, **kwargs)
+                models.append(weakref.ref(run.model))
+                return run
+            self.run_suite(temporary, trainer=tracked)
+            self.assertTrue(all(model() is None for model in models))
+
+    def test_rejected_export_does_not_complete_seed_or_compute_benchmark(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            oracle = Mock()
+            with patch("src.evaluation.validation_artifacts.export_checked_plan", return_value=None):
+                with self.assertRaisesRegex(RuntimeError, "El verificador rechazó un plan de validación"):
+                    self.run_suite(temporary, seeds=(0,), benchmark=oracle)
+            oracle.assert_not_called()
+            report = json.loads(next(Path(temporary).glob("*/report.json")).read_text())
+            self.assertEqual(report["status"], "failed")
+            self.assertEqual(report["completed_runs"], 0)
             self.assertNotIn("summary", report)
 
     def test_complete_computation_is_not_a_passed_tiny_policy_gate(self):
