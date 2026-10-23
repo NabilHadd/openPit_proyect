@@ -1,4 +1,38 @@
-# Continuidad — actualización con paper (2026-10-17 UTC)
+# Continuidad — controles experimentales (2026-10-23)
+
+## Rama y último trabajo
+
+- Se revisó `main` limpio, se hizo `git fetch origin main` y se comprobó 0/0 commits
+  de diferencia. No había cambios que integrar. Se creó `optimizacion-van` desde
+  `eb7cf86`, sin sobrescribir cambios ni hacer push/commit.
+- El usuario aprobó cuatro controles **solo experimentales**, no modelo final:
+  posición/física exacta × gamma 0,7/1, mismo entorno de conos con seis direcciones
+  en ambas fases. Prioridad: hito 1; se mantienen las métricas de diagnóstico.
+- Nuevo modo `main.py experiments`, modelos aislados en
+  `src/models/experimental_q_learning.py`, generador por control/semilla y métricas
+  pasivas. La clave exacta conserva horizonte y normaliza solo fase bajo paridad 6/6.
+- Pruebas de encodings, métricas calculables a mano, independencia Q/RNG, orden
+  post hoc de referencia/benchmark, suite incompleta y exportación no final.
+  Suite ampliada: 65 pruebas sintéticas pasan y una integración privada opcional;
+  habilitando el Excel real pasan **66/66**. Revisión independiente estática sin
+  hallazgos accionables. Se comprobó liberación de modelos sin GC cíclico.
+- Corridas reales: smoke 5 episodios × 2 semillas × 4; 100 episodios × 10 × 4;
+  después 1.000 episodios × 10 × 4. En la última, máximos A=294.000, B=286.000,
+  C=326.000, D=296.000. **Ningún control alcanzó el hito 1**.
+- El máximo C/semilla2 contiene los 42 positivos y el bloque 37 de −10.000. Se
+  reprodujeron los 40 caminos seleccionados y se verificaron independientemente.
+  El Excel original conserva su hash.
+- La instrumentación distingue aliasing de falta de cobertura: claves compactas
+  muy reutilizadas pero inconsistentes; físicas sin colisiones pero ~83% de claves
+  únicas solo visitadas una vez y ~97,5% de visitas greedy a claves no aprendidas.
+  Todos los greedy de estos controles terminaron por límite de pasos.
+- Protocolo, comandos y resultados completos:
+  [`controlled_experiments.md`](controlled_experiments.md). Artefactos principales:
+  `artifacts/reports/20261023T140217-experimental-controls-02c11961/`.
+- Las corridas normales se conservan; no se añadió VND, Dyna-Q ni dependencias.
+  No usar la ruta diagnóstica de 336.000 para inicializar o guiar Q.
+
+## Registro anterior — actualización con paper (2026-10-17 UTC)
 
 ## Últimas confirmaciones y selección del camino
 

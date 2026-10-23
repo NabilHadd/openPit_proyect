@@ -262,6 +262,27 @@ que la aprobación minera y compatibilidad del formato del cliente están pendie
 
 ## Continuidad
 
+### Controles experimentales VAN 2×2 (no modelo final)
+
+La rama `optimizacion-van` incorpora un modo separado para comparar posición/período
+frente a estado físico exacto y gamma=0,7 frente a gamma=1. Todos usan el **mismo
+entorno de conos con seis direcciones en ambas fases**, alpha=1 y epsilon=0,3 por
+defecto. No reemplaza `train` ni promueve controles al modelo final.
+
+```bash
+python -B main.py experiments --data 'data/raw/Bloques105_SinRestricción.xlsx' --precedence grid9-z-up --episodes 1000 --max-steps 500 --seeds 0 1 2 3 4 5 6 7 8 9
+```
+
+El reporte guarda éxito/gap y primer hit post hoc, métricas de reutilización y
+cobertura de Q, retornos de navegación, pasos sin extracción, causas de cierre y
+tiempos por fase. Referencia y benchmark se consultan **después** de completar toda
+la suite. Una suite incompleta queda fallida, sin tasas de éxito parciales.
+
+Se ejecutaron 40 ensayos de 1.000 episodios: mejor camino 326.000 (42 positivos y
+un bloque de −10.000); ningún control alcanzó 336.000. Estos controles son diagnósticos,
+no una propuesta de modelo final. Protocolo, comandos, métricas y lectura de los
+resultados: [`docs/controlled_experiments.md`](docs/controlled_experiments.md).
+
 Ver [`docs/continuity.md`](docs/continuity.md) para resultados ejecutados, limitaciones
 y próximos insumos necesarios. Mantener intacto el Excel original. Datos y artefactos
 locales no se versionan.

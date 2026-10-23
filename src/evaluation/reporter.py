@@ -86,14 +86,17 @@ def load_plan(path: Path) -> Plan:
 
 
 def export_checked_plan(directory: Path, mine: Mine, plan: Plan, parameters,
-                        precedences: Precedences | None) -> str | None:
+                        precedences: Precedences | None, *, experimental_context: dict | None = None) -> str | None:
     evaluation = evaluate_plan(mine, plan, parameters, precedences)
     if evaluation.feasible is not True:
         return None
     name = "conditional-plan.json" if evaluation.precedence_status == "conditional" else "verified-plan.json"
-    write_json(directory / name, {**plan_payload(plan), "evaluation": asdict(evaluation),
-                                 "data_sha256": mine.data_sha256,
-                                 "domain_validation": "pending-client-confirmation"})
+    payload = {**plan_payload(plan), "evaluation": asdict(evaluation),
+               "data_sha256": mine.data_sha256, "domain_validation": "pending-client-confirmation"}
+    if experimental_context is not None:
+        payload["experimental_control"] = experimental_context
+        payload["is_final_model"] = False
+    write_json(directory / name, payload)
     return name
 
 
