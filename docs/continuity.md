@@ -1,4 +1,101 @@
-# Continuidad — actualización con paper (2026-10-17 UTC)
+# Continuidad — validación por etapas (2026-10-23)
+
+## Refactor de responsabilidades
+
+Tras el commit del usuario `79d04bb`, se separó el antiguo orquestador ubicado en
+`src/evaluation/validation_report.py`: estadísticas en ese módulo, ciclo de semillas
+en `src/training/validation_suite.py` y persistencia en
+`src/evaluation/validation_artifacts.py`. La suite acepta entrenamiento, benchmark
+y almacenamiento inyectables, con un contrato de almacenamiento de tres operaciones.
+
+El CLI importa la suite desde training; la ruta Python anterior se reemplazó y está
+documentada en `learning_validation.md`. No cambian entrenamiento, esquema JSON,
+exportaciones, estados/errores ni orden post hoc. Se compararon 60 archivos JSON
+contra capturas anteriores (finite, external, mina grande y fallo de semilla),
+ignorando solo procedencia de código y tiempos: todos equivalentes.
+Verificación del refactor: 98/98 pruebas con el Excel habilitado; sin él pasan 97
+y se omite la integración privada. Se añadieron pruebas estadísticas sin modelo ni
+disco, de dependencias inyectadas, errores de escritura/exportación, orden post hoc
+y liberación del modelo anterior. Revisión estática independiente sin hallazgos.
+
+## Trabajo posterior a los cuatro controles
+
+El usuario guardó y publicó los controles anteriores en `8e20087`. Después pidió:
+validar el entorno; resolver una mina diminuta por enumeración y aprendizaje;
+revisar empates/Stop/truncamientos/cobertura; y consolidar gamma=1 con diez semillas
+y presupuestos iguales de transiciones. No convertirlo automáticamente en modelo final.
+
+- Nuevo CLI aislado: `python -B -m src.validation --transitions 10000`.
+- Pruebas exhaustivas del contrato físico con capacidad, períodos y descuento.
+  Se comprobaron también 20.684 transiciones reales guardadas, sin duplicación,
+  infracción de precedencias ni discrepancia entre recompensa y VAN.
+- Oráculo independiente de seis bloques: óptimo alcanzable 15, requiere pérdida
+  intermedia −5 y evitar pérdidas opcionales. No entra al agente.
+- Con horizonte finito 12, semillas 0…9 y 10.000 transiciones por semilla: **200/200
+  rollouts finales óptimos**; el test automatizado también lo exige en cuatro bloques.
+- Desempate uniforme de evaluación con RNG separado; mejor observado solo de
+  aprendizaje, mejor episodio completo y distribución de políticas separados.
+- Horizonte `finite` sigue predeterminado. `external` usa reloj estacionario y
+  truncamientos con bootstrap; **no son el mismo problema**. Un piloto external con
+  límite 12 no reprodujo el óptimo en todos los rollouts: ciclos gratuitos gamma=1,
+  no una prueba superada que deba escalarse sin más.
+- Protocolo, artefactos y comandos: [`learning_validation.md`](learning_validation.md).
+- Comparación real terminada: 100.000 transiciones por semilla 0…9, gamma=1, alpha=1,
+  epsilon=0,3, horizonte finito 500 y 20 evaluaciones por semilla. **336.000 observado
+  en 4/10 semillas** (2,4,7,9); episodios completos óptimos en 3/10; política final
+  30/200 aciertos, solo semillas 2 (16/20) y 9 (14/20). Media 305.250. Ninguna semilla
+  reproduce el óptimo en todos sus rollouts. Los 200 terminan por Stop, no horizonte.
+- Reproducidos y verificados 10 mejores prefijos y 200 políticas; los 34 óptimos contienen
+  los 42 positivos sin negativos. Referencia revalidada post hoc; Excel original intacto.
+  Artefactos: `artifacts/reports/20261023T193418-learning-validation-aba1d7d5/`.
+- Ablación con las mismas Q: ordered agota 500 pasos en 10/10, media 315.000; uniform
+  media 305.250 y 200/200 Stop. Corregir sesgo de orden no asegura mejorar VAN.
+  Los Stop uniformes siempre fueron empates; no atribuirlos sin más a parada aprendida.
+- La revisión independiente detectó y motivó dos regresiones nuevas: el oráculo
+  external no puede usar el corte del recolector como horizonte del problema, y un
+  rollout truncado con valor óptimo no puede pasar la puerta de política completada.
+- Suite ampliada: 85 pruebas en total, con integración privada opcional. Comando:
+  `python -B -m unittest discover -s tests -v`. Las nuevas funciones no cambian los
+  defaults de `main.py`, ni recompensas, negativos o acciones de los controles guardados.
+  Con el Excel habilitado pasaron 85/85; inspecciones IDE sin errores y Graphify actualizado.
+  Puerta diminuta estricta reejecutada: `20261023T194311-learning-validation-e2e0c9b1`,
+  200/200 políticas completadas óptimas y las diez Q idénticas a la corrida inicial.
+
+## Registro anterior — controles experimentales
+
+## Rama y último trabajo
+
+- Se revisó `main` limpio, se hizo `git fetch origin main` y se comprobó 0/0 commits
+  de diferencia. No había cambios que integrar. Se creó `optimizacion-van` desde
+  `eb7cf86`, sin sobrescribir cambios ni hacer push/commit.
+- El usuario aprobó cuatro controles **solo experimentales**, no modelo final:
+  posición/física exacta × gamma 0,7/1, mismo entorno de conos con seis direcciones
+  en ambas fases. Prioridad: hito 1; se mantienen las métricas de diagnóstico.
+- Nuevo modo `main.py experiments`, modelos aislados en
+  `src/models/experimental_q_learning.py`, generador por control/semilla y métricas
+  pasivas. La clave exacta conserva horizonte y normaliza solo fase bajo paridad 6/6.
+- Pruebas de encodings, métricas calculables a mano, independencia Q/RNG, orden
+  post hoc de referencia/benchmark, suite incompleta y exportación no final.
+  Suite ampliada: 65 pruebas sintéticas pasan y una integración privada opcional;
+  habilitando el Excel real pasan **66/66**. Revisión independiente estática sin
+  hallazgos accionables. Se comprobó liberación de modelos sin GC cíclico.
+- Corridas reales: smoke 5 episodios × 2 semillas × 4; 100 episodios × 10 × 4;
+  después 1.000 episodios × 10 × 4. En la última, máximos A=294.000, B=286.000,
+  C=326.000, D=296.000. **Ningún control alcanzó el hito 1**.
+- El máximo C/semilla2 contiene los 42 positivos y el bloque 37 de −10.000. Se
+  reprodujeron los 40 caminos seleccionados y se verificaron independientemente.
+  El Excel original conserva su hash.
+- La instrumentación distingue aliasing de falta de cobertura: claves compactas
+  muy reutilizadas pero inconsistentes; físicas sin colisiones pero ~83% de claves
+  únicas solo visitadas una vez y ~97,5% de visitas greedy a claves no aprendidas.
+  Todos los greedy de estos controles terminaron por límite de pasos.
+- Protocolo, comandos y resultados completos:
+  [`controlled_experiments.md`](controlled_experiments.md). Artefactos principales:
+  `artifacts/reports/20261023T140217-experimental-controls-02c11961/`.
+- Las corridas normales se conservan; no se añadió VND, Dyna-Q ni dependencias.
+  No usar la ruta diagnóstica de 336.000 para inicializar o guiar Q.
+
+## Registro anterior — actualización con paper (2026-10-17 UTC)
 
 ## Últimas confirmaciones y selección del camino
 

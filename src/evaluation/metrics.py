@@ -5,7 +5,7 @@ import math
 
 from src.config import ProblemParameters
 from src.data.dataset import Mine
-from src.data.transforms import Precedences
+from src.data.precedences import Precedences
 from src.training.rewards import discounted_value
 
 
@@ -68,6 +68,8 @@ def evaluate_plan(mine: Mine, plan: Plan, parameters: ProblemParameters,
         if period < last_period:
             errors.append(f"Paso {index}: períodos no monótonos")
         last_period = period
+        if not by_id[block_id].reachable:
+            errors.append(f"Bloque {block_id}: inalcanzable (sin cono completo dentro de la grilla)")
         if precedences is not None:
             missing = precedences.predecessors[block_id] - seen
             if missing:
@@ -82,6 +84,6 @@ def evaluate_plan(mine: Mine, plan: Plan, parameters: ProblemParameters,
         for period, used in enumerate(usage):
             if used > parameters.capacity and not math.isclose(used, parameters.capacity, rel_tol=1e-12):
                 errors.append(f"Período {period}: capacidad excedida ({used} > {parameters.capacity})")
-    status = "unverified" if precedences is None else ("conditional" if precedences.provisional else "specified")
+    status = "unverified" if precedences is None else "verified"
     feasible = False if errors else (None if precedences is None else True)
     return Evaluation(feasible, raw_value, npv, tuple(errors), status, tuple(usage))

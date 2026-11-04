@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from collections.abc import Callable
+from time import perf_counter
 
 from src.envs.mine_env import Action, MineEnv
 from src.evaluation.metrics import Evaluation, Plan, evaluate_plan
@@ -46,7 +47,8 @@ class TrainingResult:
 
 
 def run_episode(env: MineEnv, model: BaseModel, *, learn: bool,
-                on_transition: Callable[[int, Action], None] | None = None) -> tuple[float, int]:
+                on_transition: Callable[[int, Action], None] | None = None,
+                transition_observer: Callable | None = None) -> tuple[float, int]:
     state = env.reset(training=learn)
     reward_sum = 0.0
     steps = 0
@@ -60,9 +62,11 @@ def run_episode(env: MineEnv, model: BaseModel, *, learn: bool,
             model.update(state, action, reward, next_state, env.available_actions(), terminal)
         reward_sum += reward
         steps += 1
-        state = next_state
         if on_transition is not None:
             on_transition(steps, action)
+        if transition_observer is not None:
+            transition_observer(state, action, reward, next_state)
+        state = next_state
     return reward_sum, steps
 
 
@@ -98,15 +102,20 @@ class PathObserver:
                                      steps, tuple(self.actions))
 
 
-def train(env: MineEnv, model: BaseModel, episodes: int) -> TrainingResult:
+def train(env: MineEnv, model: BaseModel, episodes: int, *, diagnostics=None) -> TrainingResult:
     if episodes < 1:
         raise ValueError("Se requiere al menos un episodio")
     history = []
     best = None
     selected_path = None
+    learning_started = perf_counter() if diagnostics is not None else 0.0
     for episode in range(episodes):
         observer = PathObserver(env, episode, "learning")
-        reward_sum, steps = run_episode(env, model, learn=True, on_transition=observer.observe)
+        trajectory = diagnostics.new_episode("learning", episode) if diagnostics is not None else None
+        reward_sum, steps = run_episode(env, model, learn=True, on_transition=observer.observe,
+                                       transition_observer=trajectory.observe if trajectory is not None else None)
+        if trajectory is not None:
+            trajectory.finish(getattr(env, "termination_reason", None), steps)
         observer.finish(steps)
         record = EpisodeRecord(episode, reward_sum, steps, env.plan, checked_evaluation(env),
                                tuple(getattr(env, "action_history", ())),
@@ -116,12 +125,21 @@ def train(env: MineEnv, model: BaseModel, episodes: int) -> TrainingResult:
             best = record
         if observer.best is not None and (selected_path is None or observer.best.evaluation.npv > selected_path.evaluation.npv):
             selected_path = observer.best
+    if diagnostics is not None:
+        diagnostics.learning_seconds = perf_counter() - learning_started
+    greedy_started = perf_counter() if diagnostics is not None else 0.0
     observer = PathObserver(env, None, "construction")
-    _, greedy_steps = run_episode(env, model, learn=False, on_transition=observer.observe)
+    trajectory = diagnostics.new_episode("construction", None) if diagnostics is not None else None
+    _, greedy_steps = run_episode(env, model, learn=False, on_transition=observer.observe,
+                                 transition_observer=trajectory.observe if trajectory is not None else None)
+    if trajectory is not None:
+        trajectory.finish(getattr(env, "termination_reason", None), greedy_steps)
     observer.finish(greedy_steps)
     greedy_evaluation = checked_evaluation(env)
     if observer.best is not None and (selected_path is None or observer.best.evaluation.npv > selected_path.evaluation.npv):
         selected_path = observer.best
+    if diagnostics is not None:
+        diagnostics.greedy_seconds = perf_counter() - greedy_started
     return TrainingResult(tuple(history), best.episode, best.plan, best.evaluation,
                           env.plan, greedy_evaluation, tuple(getattr(env, "action_history", ())),
                           getattr(env, "termination_reason", "terminal"), greedy_steps,

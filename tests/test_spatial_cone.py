@@ -2,7 +2,7 @@ import unittest
 
 from src.config import LearningParameters, ProblemParameters, SpatialParameters
 from src.data.dataset import Block, Mine
-from src.data.transforms import Precedences, grid9_z_up, grid9_z_down
+from src.data.precedences import Precedences
 from src.envs.mine_env import ADVANCE, STOP
 from src.envs.spatial_cone_env import START, SpatialConeEnv, SpatialState
 from src.evaluation.metrics import evaluate_plan
@@ -15,7 +15,8 @@ def layered(parameters=ProblemParameters(), max_steps=20, construction_up=False)
     mine = Mine((Block(1, 0, 0, 3, 5, tonnes=2), Block(2, 0, 0, 2, -4, tonnes=3),
                  Block(3, 0, 0, 1, 15, tonnes=1), Block(4, 0, 1, 3, -2, tonnes=1),
                  Block(5, 5, 5, 3, -1, tonnes=1)))
-    return SpatialConeEnv(mine, parameters, grid9_z_up(mine), SpatialParameters("max-z", max_steps, construction_up))
+    rules = Precedences({1: (), 2: (1, 4), 3: (2,), 4: (), 5: ()})
+    return SpatialConeEnv(mine, parameters, rules, SpatialParameters(max_steps, construction_up))
 
 
 class SpatialTests(unittest.TestCase):
@@ -30,7 +31,7 @@ class SpatialTests(unittest.TestCase):
             env.step(START)
         tied_mine = Mine((Block(9, 0, 0, 1, 7), Block(2, 1, 0, 1, 7)))
         tied_rules = Precedences({9: frozenset(), 2: frozenset()}, "synthetic", "test")
-        tied = SpatialConeEnv(tied_mine, ProblemParameters(), tied_rules, SpatialParameters("max-z"))
+        tied = SpatialConeEnv(tied_mine, ProblemParameters(), tied_rules, SpatialParameters())
         self.assertEqual(tied.start_id, 2)
 
     def test_transitive_cones_overlap_and_repeatability(self):
@@ -46,7 +47,8 @@ class SpatialTests(unittest.TestCase):
     def test_shared_cone_extracts_each_block_once(self):
         mine = Mine((Block(1, 0, 0, 2, 9), Block(2, 1, 0, 2, -2),
                      Block(3, 0, 0, 1, 20), Block(4, 1, 0, 1, 30), Block(5, 5, 5, 2, -1)))
-        env = SpatialConeEnv(mine, ProblemParameters(), grid9_z_up(mine), SpatialParameters("max-z"))
+        rules = Precedences({1: (), 2: (), 3: (1, 2), 4: (1, 2), 5: ()})
+        env = SpatialConeEnv(mine, ProblemParameters(), rules, SpatialParameters())
         rewards = [env.step(a)[1] for a in (START, "down", "south")]
         self.assertEqual(rewards, [9, 18, 30])
         self.assertEqual(len(env.plan.extractions), 4)
@@ -105,15 +107,21 @@ class SpatialTests(unittest.TestCase):
         model.q[model.state_key(before), "down"] = 10
         self.assertEqual(q_table_payload(model)["entries"][0]["state"], {"position": 1, "period": 2})
 
-    def test_orientation_min_z_and_invalid_configuration(self):
-        mine = Mine((Block(1, 0, 0, 1, 5), Block(2, 0, 0, 2, 9)))
-        env = SpatialConeEnv(mine, ProblemParameters(), grid9_z_down(mine), SpatialParameters("min-z"))
+    def test_unreachable_blocks_are_never_destinations(self):
+        mine = Mine((Block(1, 0, 0, 2, 5), Block(4, 1, 0, 2, -1),
+                     Block(2, 0, 0, 1, 50, reachable=False), Block(3, 1, 0, 1, 7)))
+        rules = Precedences({1: (), 4: (), 2: (1,), 3: (4,)})
+        env = SpatialConeEnv(mine, ProblemParameters(), rules, SpatialParameters(10, True))
         env.step(START)
-        self.assertIn("down", env.available_actions())
+        self.assertNotIn("down", env.available_actions())  # (0,0,1) exists but is unreachable
+        self.assertEqual(env.step("south")[1], -1)
         _, reward, terminal = env.step("down")
-        self.assertEqual(reward, 9)
-        self.assertTrue(terminal)
-        for arguments in (("invalid", 5), ("max-z", 0)):
+        self.assertEqual(reward, 7)
+        self.assertTrue(terminal)  # every reachable block extracted
+        self.assertEqual(env.termination_reason, "all_extracted")
+
+    def test_invalid_configuration(self):
+        for arguments in ((0,), (5, "yes"), (5, True, "implicit")):
             with self.assertRaises(ValueError):
                 SpatialParameters(*arguments)
 

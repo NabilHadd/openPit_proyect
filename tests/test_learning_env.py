@@ -2,7 +2,7 @@ import unittest
 
 from src.config import LearningParameters, ProblemParameters
 from src.data.dataset import Block, Mine
-from src.data.transforms import Precedences, grid9_z_up
+from src.data.precedences import Precedences
 from src.envs.mine_env import ADVANCE, STOP, MineEnv, State
 from src.evaluation.metrics import evaluate_plan
 from src.models.q_learning import QLearning
@@ -11,7 +11,7 @@ from src.training.trainer import run_episode, train
 
 def fixture(parameters=ProblemParameters()):
     mine = Mine((Block(10, 1, 1, 2, -4, tonnes=2), Block(20, 1, 1, 1, 15, tonnes=3)))
-    return MineEnv(mine, parameters, grid9_z_up(mine))
+    return MineEnv(mine, parameters, Precedences({10: (), 20: (10,)}))
 
 
 class EnvTests(unittest.TestCase):

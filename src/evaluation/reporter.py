@@ -1,9 +1,9 @@
 """Local JSON provenance and checked internal plans; not the client's export format."""
 
+import csv
 from dataclasses import asdict
 from datetime import datetime, timezone
 from hashlib import sha256
-from importlib.metadata import version
 import json
 from pathlib import Path
 import platform
@@ -12,9 +12,9 @@ import sys
 from uuid import uuid4
 
 from src.config import PROJECT_ROOT
-from src.data.dataset import Mine
-from src.data.transforms import Precedences
-from src.evaluation.metrics import Extraction, Plan, evaluate_plan
+from src.data.dataset import SOLUTION_COLUMNS, Mine
+from src.data.precedences import Precedences
+from src.evaluation.metrics import Plan, evaluate_plan
 
 
 def write_json(path: Path, payload):
@@ -40,7 +40,7 @@ def code_provenance() -> dict:
 
 
 def runtime_metadata() -> dict:
-    return {"python": sys.version, "platform": platform.platform(), "openpyxl": version("openpyxl")}
+    return {"python": sys.version, "platform": platform.platform()}
 
 
 def create_run_directory(root: Path, mode: str) -> Path:
@@ -50,16 +50,23 @@ def create_run_directory(root: Path, mode: str) -> Path:
     return path
 
 
+def preparation_metadata(data_path: str) -> dict | None:
+    """Provenance written by tools/prepare_blocks.py next to the CSV (<name>.meta.json), if any."""
+    meta = Path(data_path).with_suffix(".meta.json")
+    return json.loads(meta.read_text(encoding="utf-8")) if meta.is_file() else None
+
+
 def mine_metadata(mine: Mine) -> dict:
-    return {"path": mine.source, "sha256": mine.data_sha256, "sheet": mine.sheet,
-            "block_count": len(mine.blocks), "economic_units": "No declaradas en el libro; se conserva Valor",
+    return {"path": mine.source, "sha256": mine.data_sha256,
+            "preparation": preparation_metadata(mine.source) if mine.source != "synthetic" else None,
+            "block_count": len(mine.blocks), "economic_units": "No declaradas en los datos; se conserva value",
             "blocks": [{"internal_index": i, **asdict(b)} for i, b in enumerate(mine.blocks)]}
 
 
 def precedence_metadata(precedences: Precedences | None) -> dict | None:
     if precedences is None:
         return None
-    return {"rule": precedences.rule, "source": precedences.source, "provisional": precedences.provisional,
+    return {"rule": precedences.rule, "source": precedences.source,
             "predecessors": {str(k): sorted(v) for k, v in precedences.predecessors.items()},
             "within_period": "Predecessors must occur earlier in the ordered plan; same period allowed"}
 
@@ -69,32 +76,26 @@ def plan_payload(plan: Plan) -> dict:
             "period_origin": 0, "extractions": [asdict(e) for e in plan.extractions]}
 
 
-def load_plan(path: Path) -> Plan:
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(payload, dict):
-        raise ValueError("El plan JSON debe ser un objeto")
-    if payload.get("schema_version") != 1 or payload.get("format") != "openpit-internal-ordered-plan":
-        raise ValueError("Formato de plan interno desconocido")
-    if payload.get("period_origin") != 0:
-        raise ValueError("El formato interno requiere períodos desde cero")
-    entries = payload.get("extractions")
-    if not isinstance(entries, list):
-        raise ValueError("extractions debe ser una lista ordenada")
-    if any(not isinstance(e, dict) or set(e) != {"block_id", "period"} for e in entries):
-        raise ValueError("Cada extracción requiere exactamente block_id y period")
-    return Plan(tuple(Extraction(e["block_id"], e["period"]) for e in entries))
+PLAN_FILE = "plan.csv"
+
+
+def write_plan_csv(path: Path, plan: Plan) -> None:
+    """Ordered plan -> standard plan CSV (order,id,period), the same format as a solution."""
+    with Path(path).open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(SOLUTION_COLUMNS)
+        writer.writerows((order, e.block_id, e.period) for order, e in enumerate(plan.extractions, start=1))
 
 
 def export_checked_plan(directory: Path, mine: Mine, plan: Plan, parameters,
                         precedences: Precedences | None) -> str | None:
+    """Write the plan only if the independent verifier accepts it. Its evaluation belongs
+    in the run's report.json, not in the CSV."""
     evaluation = evaluate_plan(mine, plan, parameters, precedences)
     if evaluation.feasible is not True:
         return None
-    name = "conditional-plan.json" if evaluation.precedence_status == "conditional" else "verified-plan.json"
-    write_json(directory / name, {**plan_payload(plan), "evaluation": asdict(evaluation),
-                                 "data_sha256": mine.data_sha256,
-                                 "domain_validation": "pending-client-confirmation"})
-    return name
+    write_plan_csv(directory / PLAN_FILE, plan)
+    return PLAN_FILE
 
 
 def q_table_payload(model) -> dict:

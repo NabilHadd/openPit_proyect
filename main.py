@@ -2,83 +2,226 @@
 
 import argparse
 from dataclasses import asdict
+import json
 import math
 from pathlib import Path
 from time import perf_counter
 
 from src.config import LearningParameters, ProblemParameters, SpatialParameters, project_path
-from src.data.dataset import load_mine
-from src.data.transforms import (complete_cone_candidates, grid9_z_up, grid9_z_down,
-                                 load_precedences, load_selections, order_selection)
+from src.data.dataset import Mine, Solution, load_mine, load_solution
+from src.data.precedences import order_selection, pit_precedences, Precedences
 from src.evaluation.benchmark import maximum_closure
+from src.evaluation.control_report import attach_benchmark_outcome, summarize_controls, summary_markdown
 from src.evaluation.metrics import Extraction, Plan, evaluate_plan
 from src.evaluation.plots import plot_history
 from src.evaluation.reporter import (code_provenance, create_run_directory, export_checked_plan,
-                                     load_plan, mine_metadata, plan_payload, precedence_metadata,
+                                     mine_metadata, plan_payload, precedence_metadata,
                                      q_table_payload, runtime_metadata, write_json)
 from src.models.q_learning import QLearning, SpatialQLearning
 from src.training.experiment_runner import run_experiments
+from src.training.controlled_experiments import CONTROL_SPECS, iter_control_runs, validate_controls
+
+
+DEFAULT_SOLUTION = "data/processed/solution.csv"
 
 
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description="Planificación minera experimental; réplica del paper pendiente")
-    result.add_argument("mode", choices=("reference", "train", "evaluate-plan", "benchmark"))
-    result.add_argument("--data", required=True, help="Ruta exacta del Excel; relativa al repositorio o absoluta")
-    rules = result.add_mutually_exclusive_group()
-    rules.add_argument("--precedence", choices=("grid9-z-up", "grid9-z-down"), help="Regla explícita; grid9-z-up corresponde a la superficie Z=3 confirmada del caso reducido")
-    rules.add_argument("--precedences-file", help="JSON explícito con source y predecessors para todos los IDs")
+    result.add_argument("mode", choices=("train", "evaluate-plan", "benchmark", "experiments"))
+    result.add_argument("--data", required=True, help="CSV estándar de bloques (id,x,y,z,value[,tonnes]); relativo al repositorio o absoluto")
+    solution = result.add_mutually_exclusive_group()
+    solution.add_argument("--solution", default=DEFAULT_SOLUTION,
+                          help=f"CSV de solución de referencia (order,id,period); default={DEFAULT_SOLUTION}")
+    solution.add_argument("--no-solution", action="store_true", help="Ejecutar explícitamente sin solución de referencia")
     result.add_argument("--periods", type=int, default=1)
     result.add_argument("--discount-rate", type=float, default=0.0)
     result.add_argument("--capacity", type=float)
     result.add_argument("--capacity-unit", choices=("blocks", "tonnes"), default="blocks")
     result.add_argument("--episodes", type=int, default=100)
-    result.add_argument("--seeds", type=int, nargs="+", default=[0])
-    result.add_argument("--alpha", type=float, help="Default full-state=0.2; spatial-cone=1")
-    result.add_argument("--gamma", type=float, help="Factor RL, distinto de discount-rate; default full-state=1, spatial-cone=0.7")
-    result.add_argument("--epsilon", type=float, help="Default full-state=0.2; spatial-cone=0.3")
-    result.add_argument("--model", choices=("full-state", "spatial-cone"), default="full-state")
-    result.add_argument("--surface", choices=("min-z", "max-z"), help="Spatial: por defecto coincide con la regla geométrica; obligatorio con reglas JSON")
+    result.add_argument("--seeds", type=int, nargs="+", help="Default experiments=0..9; otros modos=0")
+    result.add_argument("--alpha", type=float, help="Default full-state=0.2; spatial-cone/experiments=1")
+    result.add_argument("--gamma", type=float, help="Factor RL, distinto de discount-rate; full-state=1, spatial-cone=0.7; experiments fija ambos valores")
+    result.add_argument("--epsilon", type=float, help="Default full-state=0.2; spatial-cone/experiments=0.3")
+    result.add_argument("--model", choices=("full-state", "spatial-cone"), help="Solo train; default=full-state. experiments no admite este selector")
     result.add_argument("--max-steps", type=int, help="Horizonte espacial artificial; default=500")
     result.add_argument("--construction-up", action="store_true", help="Extensión: permitir subir también al construir; no la variante de cinco direcciones del paper")
     result.add_argument("--exact-benchmark", action="store_true", help="Solo train: máximo cierre DESPUÉS de entrenar; sin capacidad ni descuento")
-    result.add_argument("--plan", help="Plan interno JSON para evaluate-plan")
+    result.add_argument("--plan", help="evaluate-plan: CSV de plan (order,id,period); sin --plan se evalúa --solution")
     result.add_argument("--output", default="artifacts/reports")
     result.add_argument("--plot", action="store_true", help="Guardar curva SVG por semilla")
     return result
 
 
-def reference_report(mine, selections, parameters, precedences) -> tuple[dict, Plan]:
-    economic_value = sum(mine.by_id[i].value for i in selections.reference.ids)
-    ids = selections.reference.ids
+def spatial_parameters(args, *, control: bool = False) -> SpatialParameters:
+    return SpatialParameters(500 if args.max_steps is None else args.max_steps,
+                             True if control else args.construction_up)
+
+
+def solution_file(args) -> Path | None:
+    """Default solution unless --no-solution; a missing file is an error, never a silent skip."""
+    if args.no_solution:
+        return None
+    path = project_path(args.solution)
+    if not path.is_file():
+        raise ValueError(f"No existe la solución {path}; indique --solution RUTA o use --no-solution")
+    return path
+
+
+def solution_metadata(solution: Solution) -> dict:
+    return {"path": solution.source, "sha256": solution.data_sha256, "ordered": solution.ordered,
+            "entries": [asdict(entry) for entry in solution.entries]}
+
+
+def plan_report(mine: Mine, solution: Solution, parameters: ProblemParameters,
+                precedences: Precedences | None) -> tuple[dict, Plan]:
+    """Evaluate a plan CSV (a reference solution or any other plan). If it has no order,
+    a valid witness order is built, period by period, only to verify it."""
+    economic_value = sum(mine.by_id[i].value for i in solution.ids)
     order_error = None
-    if precedences is not None:
-        try:
-            ids = order_selection(ids, precedences)
-        except ValueError as exc:
-            order_error = str(exc)
-    plan = Plan(tuple(Extraction(i) for i in ids))
-    # The visual is only a selection. A one-period witness is constructed explicitly.
+    if solution.ordered:
+        extractions = tuple(Extraction(e.block_id, e.period) for e in solution.entries)
+    else:
+        extractions, done = [], set()
+        for period in sorted({e.period for e in solution.entries}):
+            ids = sorted(e.block_id for e in solution.entries if e.period == period)
+            if precedences is not None and order_error is None:
+                try:
+                    ids = order_selection(ids, precedences, done)
+                except ValueError as exc:
+                    order_error = str(exc)
+            extractions.extend(Extraction(i, period) for i in ids)
+            done.update(ids)
+        extractions = tuple(extractions)
+    plan = Plan(extractions)
     evaluation = evaluate_plan(mine, plan, parameters, precedences)
-    geometry = {}
-    if precedences is not None and precedences.rule in {"grid9-z-up", "grid9-z-down"}:
-        surface = "max-z" if precedences.rule == "grid9-z-up" else "min-z"
-        candidates = complete_cone_candidates(mine, surface)
-        geometry = {"surface": surface, "complete_cone_candidate_ids": candidates,
-                    "matches_excel_candidates": set(candidates) == set(selections.candidates.ids),
-                    "used_to_restrict_agent": False,
-                    "interpretation": "Coincidencia geométrica diagnóstica; significado de colores pendiente de Aldo"}
-    return {"candidates": asdict(selections.candidates), "reference": asdict(selections.reference),
-            "declared_candidates": selections.declared_candidates,
-            "candidate_count_matches_declaration": len(selections.candidates.ids) == selections.declared_candidates,
-            "recalculated_raw_value": economic_value, "declared_value": selections.declared_value,
-            "economic_sum_matches": math.isclose(economic_value, selections.declared_value, rel_tol=1e-12, abs_tol=1e-6),
+    return {"plan_file": solution_metadata(solution), "recalculated_raw_value": economic_value,
             "evaluation": asdict(evaluation), "witness_order_error": order_error,
-            "candidate_geometry_diagnostic": geometry,
-            "schedule_note": "Orden testigo construido, NO secuencia del Excel; período 0 sin capacidad ni descuento",
+            "order_note": ("Orden entregado por el plan" if solution.ordered else
+                           "Plan sin orden: orden testigo construido solo para verificarlo"),
             "witness_plan": plan_payload(plan)}, plan
 
 
+def execute_control_suite(args) -> Path:
+    if args.model is not None or args.gamma is not None or args.plan is not None:
+        raise ValueError("experiments define sus cuatro controles; no admite --model, --gamma ni --plan")
+    args.seeds = list(range(10)) if args.seeds is None else args.seeds
+    seeds = tuple(args.seeds)
+    problem = ProblemParameters(args.periods, args.discount_rate, args.capacity, args.capacity_unit)
+    spatial = spatial_parameters(args, control=True)
+    learning = LearningParameters(args.episodes, 1.0 if args.alpha is None else args.alpha,
+                                  0.7, 0.3 if args.epsilon is None else args.epsilon)
+    validate_controls(problem, spatial, seeds)
+    path = project_path(args.data)
+    mine = load_mine(path)
+    precedences = pit_precedences(mine)
+    reference_path = solution_file(args)
+    directory = create_run_directory(project_path(args.output), "experimental-controls")
+    report = {
+        "schema_version": 1, "mode": "experiments", "status": "running",
+        "purpose": "Diagnostic 2x2 controls ONLY; not a final model or validated paper replica",
+        "is_final_model": False, "benchmark_used_by_agent": False,
+        "effective_config": {"data": str(path), "seeds": seeds, "episodes": learning.episodes,
+                             "alpha": learning.alpha, "epsilon": learning.epsilon,
+                             "problem": asdict(problem), "spatial": asdict(spatial),
+                             "controls": [asdict(spec) for spec in CONTROL_SPECS]},
+        "code": code_provenance(), "runtime": runtime_metadata(), "data": mine_metadata(mine),
+        "precedences": precedence_metadata(precedences), "expected_runs": len(CONTROL_SPECS) * len(seeds),
+        "timing_scope": "Generation includes environment creation, training, greedy and passive per-transition diagnostics/verifications; excludes diagnostic aggregation, file export, plots, post-hoc benchmark and reports",
+        "phase_contract": "Identical six-direction dynamics; exact Q normalizes only phase, preserving the finite horizon",
+        "milestone_definition": "At least one verified observed path matching the compatible reference solution/benchmark across at least ten distinct seeds; no target-dependent training or stopping",
+        "runs": [],
+    }
+    write_json(directory / "report.json", report)
+    expected = {(spec.id, seed) for spec in CONTROL_SPECS for seed in seeds}
+    completed = set()
+    try:
+        for run in iter_control_runs(mine, precedences, problem, spatial, learning, seeds):
+            pair = run.spec.id, run.seed
+            if pair not in expected or pair in completed or run.spec not in CONTROL_SPECS:
+                raise RuntimeError("El ejecutor emitió un control inesperado o duplicado")
+            if (run.learning.alpha, run.learning.epsilon, run.learning.episodes, run.learning.gamma) != (
+                    learning.alpha, learning.epsilon, learning.episodes, run.spec.gamma):
+                raise RuntimeError("El ejecutor cambió parámetros fuera del diseño experimental")
+            result = run.result
+            if result.selected_path is None:
+                raise RuntimeError("El control no produjo un camino observado verificado")
+            relative = Path(run.spec.id) / f"seed-{run.seed}"
+            seed_dir = directory / relative
+            seed_dir.mkdir(parents=True)
+            context = {"control": asdict(run.spec), "seed": run.seed, "purpose": "experimental-only"}
+            write_json(seed_dir / "training.json", {**asdict(result), "experimental_control": context, "is_final_model": False})
+            write_json(seed_dir / "diagnostics.json", {**run.diagnostics, "experimental_control": context, "is_final_model": False})
+            write_json(seed_dir / "q-table.json", {**q_table_payload(run.model), "experimental_control": context, "is_final_model": False})
+            exports = {}
+            for role, plan in (("selected", result.selected_path.plan), ("best-episode", result.best_plan), ("greedy", result.greedy_plan)):
+                destination = seed_dir / role
+                destination.mkdir()
+                exports[role] = export_checked_plan(destination, mine, plan, problem, precedences)
+                if exports[role] is None:
+                    raise RuntimeError("El verificador rechazó un plan del control; no se exporta como solución")
+            if args.plot:
+                plot_history(result.history, seed_dir / "training.svg")
+            report["runs"].append({
+                "control": asdict(run.spec), "seed": run.seed, "learning": asdict(run.learning),
+                "artifact_directory": str(relative), "exports": exports,
+                "generation_seconds": run.generation_seconds,
+                "diagnostic_summary_seconds": run.diagnostic_summary_seconds,
+                "best_episode_evaluation": asdict(result.best_evaluation),
+                "greedy_evaluation": asdict(result.greedy_evaluation),
+                "selected_evaluation": asdict(result.selected_path.evaluation),
+                "selected_source": {"phase": result.selected_path.phase, "episode": result.selected_path.episode,
+                                    "steps": result.selected_path.steps},
+                "diagnostics": {k: v for k, v in run.diagnostics.items() if k not in {"episodes", "definitions"}},
+            })
+            report["diagnostic_definitions"] = run.diagnostics["definitions"]
+            completed.add(pair)
+            report["completed_runs"] = len(completed)
+            write_json(directory / "report.json", report)
+        if completed != expected:
+            raise RuntimeError("La suite quedó incompleta; no se calcula una tasa de éxito parcial")
+
+        started = perf_counter()
+        benchmark = maximum_closure(mine, precedences, problem)
+        report["benchmark_seconds"] = perf_counter() - started
+        report["exact_benchmark"] = asdict(benchmark)
+        target = benchmark.evaluation.npv
+        reference_compatible = False
+        if reference_path is None:
+            report["reference_validation"] = {"status": "not_provided", "used_by_agent": False}
+        else:
+            try:
+                reference, _ = plan_report(mine, load_solution(reference_path, mine), problem, precedences)
+                report["reference_validation"] = {"status": "evaluated", "used_by_agent": False, **reference}
+                reference_compatible = (reference["evaluation"]["feasible"] is True and
+                                        math.isclose(reference["evaluation"]["npv"], target, rel_tol=1e-12, abs_tol=1e-6))
+            except (ValueError, KeyError) as exc:
+                report["reference_validation"] = {"status": "unavailable_or_invalid", "error": str(exc), "used_by_agent": False}
+        report["reference_compatible_with_benchmark"] = reference_compatible
+        for row in report["runs"]:
+            saved = json.loads((directory / row["artifact_directory"] / "training.json").read_text(encoding="utf-8"))
+            attach_benchmark_outcome(row, saved, target)
+        report["summary"] = summarize_controls(report["runs"], seeds, reference_compatible=reference_compatible)
+        report["generation_seconds"] = sum(row["generation_seconds"] for row in report["runs"])
+        report["status"] = "completed"
+        (directory / "summary.md").write_text(summary_markdown(report["summary"], target), encoding="utf-8")
+        write_json(directory / "report.json", report)
+    except Exception as exc:
+        report["status"] = "failed"
+        report["error"] = f"{type(exc).__name__}: {exc}"
+        report["completed_runs"] = len(completed)
+        write_json(directory / "report.json", report)
+        raise
+    print(f"Controles EXPERIMENTALES, no modelo final. Reporte: {directory / 'report.json'}")
+    for name, row in report["summary"]["controls"].items():
+        print(f"{name}: máximo observado={row['selected_max']:g}; éxitos benchmark={row['selected_hits']}/{row['runs']}; hito 1={row['milestone_1']}")
+    return directory
+
+
 def execute(args) -> Path:
+    if args.mode == "experiments":
+        return execute_control_suite(args)
+    args.model = "full-state" if args.model is None else args.model
+    args.seeds = [0] if args.seeds is None else args.seeds
     data_path = project_path(args.data)
     problem = ProblemParameters(args.periods, args.discount_rate, args.capacity, args.capacity_unit)
     defaults = (1.0, 0.7, 0.3) if args.model == "spatial-cone" else (0.2, 1.0, 0.2)
@@ -86,12 +229,8 @@ def execute(args) -> Path:
                                   for value, default in zip((args.alpha, args.gamma, args.epsilon), defaults)))
     if len(set(args.seeds)) != len(args.seeds):
         raise ValueError("Las semillas deben ser distintas")
-    if args.mode in {"train", "benchmark"} and not (args.precedence or args.precedences_file):
-        raise ValueError("Entrenar o calcular benchmark requiere precedencias explícitas; no se infieren del resultado")
-    if args.mode == "reference" and problem != ProblemParameters():
-        raise ValueError("La selección visual no define períodos/capacidad/descuento; use evaluate-plan con un plan explícito")
-    if args.mode == "evaluate-plan" and not args.plan:
-        raise ValueError("evaluate-plan requiere --plan")
+    if args.mode == "evaluate-plan" and not args.plan and args.no_solution:
+        raise ValueError("evaluate-plan sin --plan evalúa la solución; no admite --no-solution")
     if (args.mode == "benchmark" or args.exact_benchmark) and problem != ProblemParameters():
         raise ValueError("Máximo cierre requiere un período sin capacidad ni descuento")
     if args.exact_benchmark and args.mode != "train":
@@ -100,19 +239,12 @@ def execute(args) -> Path:
     if args.model == "spatial-cone":
         if args.mode != "train":
             raise ValueError("--model spatial-cone solo se usa en train")
-        expected_surface = {"grid9-z-up": "max-z", "grid9-z-down": "min-z"}.get(args.precedence)
-        surface = args.surface or expected_surface
-        if surface is None:
-            raise ValueError("Spatial con precedencias JSON requiere --surface explícita")
-        if expected_surface is not None and surface != expected_surface:
-            raise ValueError("La orientación de surface contradice la regla de precedencias")
-        spatial = SpatialParameters(surface, 500 if args.max_steps is None else args.max_steps, args.construction_up)
-    elif args.surface or args.max_steps is not None or args.construction_up:
+        spatial = spatial_parameters(args)
+    elif args.max_steps is not None or args.construction_up:
         raise ValueError("Las opciones espaciales requieren --model spatial-cone")
     mine = load_mine(data_path)
-    grid_rule = {"grid9-z-up": grid9_z_up, "grid9-z-down": grid9_z_down}.get(args.precedence)
-    precedences = (grid_rule(mine) if grid_rule else
-                   load_precedences(project_path(args.precedences_file), mine) if args.precedences_file else None)
+    precedences = pit_precedences(mine)
+    reference_path = solution_file(args) if args.mode == "train" else None
     report = {"schema_version": 1, "mode": args.mode, "effective_config": {
         **vars(args), "data": str(data_path), "output": str(project_path(args.output)),
         "alpha": learning.alpha, "gamma": learning.gamma, "epsilon": learning.epsilon,
@@ -124,12 +256,13 @@ def execute(args) -> Path:
         "paper": {"doi": "10.17159/2411-9717/1367/2021", "source": "PDF/texto aportado por usuario; pp. 647-650"},
         "domain_confirmations": {
             "scope": "Caso reducido 105 bloques; confirmaciones del usuario en conversación",
-            "surface": "Z=3 en el Excel del caso reducido",
+            "surface": "Z máximo = superficie (formato estándar de datos)",
+            "precedence": "talud 45°: 9 bloques superiores; bloques sin cono completo inalcanzables (cliente)",
             "reward": "B: valor incremental del conjunto nuevo; no recompensa terminal",
             "revisits": "mover sin volver a extraer ni contabilizar",
             "selection": "conservar camino observado de mayor VAN; permite costos negativos intermedios",
-            "still_pending": "estado Q exacto, bordes, movimientos por fase y cierre natural de episodio"},
-        "paper_replication": "partial: incremental reward, revisits and Z=3 confirmed for reduced case; exact Q state/borders/phase moves/episode ending pending",
+            "still_pending": "estado Q exacto, movimientos por fase y cierre natural de episodio"},
+        "paper_replication": "partial: incremental reward, revisits, surface and pit rule confirmed; exact Q state/phase moves/episode ending pending",
         "timing_scope": "generation_seconds incluye entrenamiento y verificación; excluye carga, metadatos, gráficos y reportes"}
 
     if args.mode == "train":
@@ -146,28 +279,27 @@ def execute(args) -> Path:
                 "termination": "stop, todos extraídos o max_steps; límite artificial incluido en estado físico",
                 "selection": "mejor prefijo factible observado de learning o construction; no modifica el aprendizaje ni detiene el recorrido",
                 "client_validation": "pending; see docs/paper_mapping.md"}
-        # Only after every seed has finished do we read reference/candidate metadata.
-        selections = load_selections(data_path, mine)
-        reference, _ = reference_report(mine, selections, ProblemParameters(), precedences)
-        report["reference"] = reference
-        reference_value = reference["recalculated_raw_value"]
-        reference_matches = reference["economic_sum_matches"]
-        reference_feasible = reference["evaluation"]["feasible"]
-        comparable = problem == ProblemParameters() and reference_matches and reference_feasible is True
-        comparison = {"target_from_workbook": selections.declared_value,
-                      "reference_value_recalculated": reference_value,
-                      "reference_matches_declaration": reference_matches,
-                      "reference_feasible": reference_feasible,
-                      "same_economic_scenario": problem == ProblemParameters(),
-                      "comparable": comparable,
-                      "precedence_status": "conditional" if precedences.provisional else "specified",
-                      "runs": len(experiments),
-                      "best_episode_target_hits": sum(math.isclose(e.result.best_evaluation.npv, selections.declared_value,
-                                                                   rel_tol=1e-12, abs_tol=1e-6) for e in experiments) if comparable else None,
-                      "greedy_target_hits": sum(math.isclose(e.result.greedy_evaluation.npv, selections.declared_value,
-                                                             rel_tol=1e-12, abs_tol=1e-6) for e in experiments) if comparable else None,
-                      "selected_path_target_hits": sum(math.isclose(e.result.selected_path.evaluation.npv, selections.declared_value,
-                                                                    rel_tol=1e-12, abs_tol=1e-6) for e in experiments) if comparable else None}
+        # Only after every seed has finished do we read the reference solution.
+        comparison = {"reference": "not_provided", "reference_value": None, "reference_feasible": None,
+                      "comparable": False,
+                      "precedence_rule": precedences.rule,
+                      "runs": len(experiments), "best_episode_target_hits": None,
+                      "greedy_target_hits": None, "selected_path_target_hits": None}
+        if reference_path is not None:
+            solution = load_solution(reference_path, mine)
+            reference, _ = plan_report(mine, solution, problem, precedences)
+            report["reference"] = reference
+            target = reference["evaluation"]["npv"]
+            comparable = reference["evaluation"]["feasible"] is True
+            def hits(values):
+                return sum(math.isclose(v, target, rel_tol=1e-12, abs_tol=1e-6) for v in values) if comparable else None
+            comparison.update({
+                "reference": "evaluated", "reference_value": target,
+                "reference_feasible": reference["evaluation"]["feasible"], "comparable": comparable,
+                "best_episode_target_hits": hits(e.result.best_evaluation.npv for e in experiments),
+                "greedy_target_hits": hits(e.result.greedy_evaluation.npv for e in experiments),
+                "selected_path_target_hits": hits(e.result.selected_path.evaluation.npv for e in experiments)})
+            report["validation_metadata"] = {"solution": solution_metadata(solution), "used_by_agent": False}
         report["comparison"] = comparison
         if args.exact_benchmark:
             start = perf_counter()
@@ -207,17 +339,14 @@ def execute(args) -> Path:
                 "selected_path": asdict(result.selected_path), "selected_export": selected_export,
                 "step_limit_episodes": sum(r.termination_reason == "step_limit" for r in result.history)})
         report["generation_seconds"] = sum(e.generation_seconds for e in experiments)
-        report["validation_metadata"] = {"candidates": asdict(selections.candidates),
-                                         "reference": asdict(selections.reference), "used_by_agent": False}
     else:
-        if args.mode == "reference":
-            selections = load_selections(data_path, mine)
-        elif args.mode == "evaluate-plan":
-            plan = load_plan(project_path(args.plan))
+        if args.mode == "evaluate-plan":
+            plan_path = project_path(args.plan) if args.plan else solution_file(args)
+            plan_file = load_solution(plan_path, mine)
         start = perf_counter()
-        if args.mode == "reference":
-            reference, plan = reference_report(mine, selections, problem, precedences)
-            report["reference"] = reference
+        if args.mode == "evaluate-plan":
+            evaluated, plan = plan_report(mine, plan_file, problem, precedences)
+            report["evaluated_plan"] = evaluated
         elif args.mode == "benchmark":
             benchmark = maximum_closure(mine, precedences, problem)
             report["exact_benchmark"] = asdict(benchmark)
@@ -236,11 +365,17 @@ def execute(args) -> Path:
             print(f"Semilla {entry['seed']}: mejor episodio={entry['best_evaluation']['npv']:g}; "
                   f"política greedy final={entry['greedy_evaluation']['npv']:g}; "
                   f"camino seleccionado={entry['selected_path']['evaluation']['npv']:g}")
-        print(f"Coincidencias con referencia (mejor/greedy): {comparison['best_episode_target_hits']}/{comparison['greedy_target_hits']}; "
-              f"ejecuciones={comparison['runs']}; precedencias={comparison['precedence_status']}")
-        print(f"Caminos seleccionados que coinciden con referencia: {comparison['selected_path_target_hits']}")
+        if comparison["reference"] == "evaluated":
+            print(f"Coincidencias con referencia (mejor/greedy): {comparison['best_episode_target_hits']}/{comparison['greedy_target_hits']}; "
+                  f"ejecuciones={comparison['runs']}")
+            print(f"Caminos seleccionados que coinciden con referencia: {comparison['selected_path_target_hits']}")
+        else:
+            print(f"Sin solución de referencia (--no-solution); ejecuciones={comparison['runs']}")
     else:
-        print(f"VAN recalculado: {evaluation.npv:g}; factible={evaluation.feasible}; precedencias={evaluation.precedence_status}")
+        print(f"VAN recalculado: {evaluation.npv:g}; factible={evaluation.feasible}")
+        if not evaluation.feasible:
+            for error in evaluation.errors[:10]:
+                print(f"  - {error}")
     return directory
 
 
