@@ -49,14 +49,11 @@ class LearningParameters:
 
 @dataclass(frozen=True)
 class SpatialParameters:
-    surface: str
     max_steps: int = 500
     construction_up: bool = False
     horizon_mode: str = "finite"
 
     def __post_init__(self):
-        if self.surface not in {"min-z", "max-z"}:
-            raise ValueError("surface debe ser min-z o max-z")
         if isinstance(self.max_steps, bool) or not isinstance(self.max_steps, int) or self.max_steps < 1:
             raise ValueError("max_steps debe ser un entero positivo")
         if not isinstance(self.construction_up, bool):

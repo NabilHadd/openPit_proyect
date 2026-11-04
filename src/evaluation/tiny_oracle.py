@@ -7,7 +7,7 @@ from math import fsum
 
 from src.config import SpatialParameters
 from src.data.dataset import Block, Mine
-from src.data.transforms import Precedences
+from src.data.precedences import Precedences
 
 
 def tiny_mine() -> tuple[Mine, Precedences]:
@@ -48,13 +48,13 @@ def enumerate_tiny(mine: Mine, rules: Precedences, spatial: SpatialParameters) -
     for size in range(len(ids) + 1):
         for subset in combinations(ids, size):
             chosen = frozenset(subset)
-            if all(rules.predecessors[i] <= chosen for i in chosen):
+            if all(blocks[i].reachable and rules.predecessors[i] <= chosen for i in chosen):
                 subset_best = max(subset_best, fsum(blocks[i].value for i in chosen))
 
-    surface_z = (max if spatial.surface == "max-z" else min)(b.z for b in mine.blocks)
-    start = min((b for b in mine.blocks if b.z == surface_z), key=lambda b: (-b.value, b.id)).id
+    surface_z = max(b.z for b in mine.blocks)
+    start = min((b for b in mine.blocks if b.z == surface_z and b.reachable), key=lambda b: (-b.value, b.id)).id
     positions = {(b.x, b.y, b.z): b.id for b in mine.blocks}
-    dz = -1 if spatial.surface == "max-z" else 1
+    dz = -1
     offsets = {"north": (-1, 0, 0), "south": (1, 0, 0), "west": (0, -1, 0),
                "east": (0, 1, 0), "down": (0, 0, dz), "up": (0, 0, -dz)}
     finite = spatial.horizon_mode == "finite"
@@ -72,7 +72,8 @@ def enumerate_tiny(mine: Mine, rules: Precedences, spatial: SpatialParameters) -
             block = blocks[position]
             destinations = [(a, positions[(block.x + dx, block.y + dy, block.z + z)])
                             for a, (dx, dy, z) in offsets.items()
-                            if (block.x + dx, block.y + dy, block.z + z) in positions]
+                            if (block.x + dx, block.y + dy, block.z + z) in positions
+                            and blocks[positions[(block.x + dx, block.y + dy, block.z + z)]].reachable]
             transitions += 1  # Stop is always available after the forced start.
             total = fsum(blocks[i].value for i in taken)
             if total > best:
@@ -87,7 +88,7 @@ def enumerate_tiny(mine: Mine, rules: Precedences, spatial: SpatialParameters) -
                     pending.extend(rules.predecessors[current])
             following = frozenset(closure), destination, remaining - 1 if finite else 0
             next_route = route + (action,)
-            terminal = (finite and remaining == 1) or len(closure) == len(blocks)
+            terminal = (finite and remaining == 1) or len(closure) == sum(b.reachable for b in mine.blocks)
             if terminal:
                 total = fsum(blocks[i].value for i in closure)
                 if total > best:

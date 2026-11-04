@@ -22,6 +22,7 @@ venv/
 data/raw/*
 data/processed/*
 !data/**/.gitkeep
+!data/processed/*.example.csv
 
 # Artefactos generados (se conserva la estructura con .gitkeep)
 artifacts/plots/*

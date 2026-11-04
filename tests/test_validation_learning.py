@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 from src.config import LearningParameters, ProblemParameters, SpatialParameters
 from src.data.dataset import Block, Mine
-from src.data.transforms import grid9_z_up
+from src.data.precedences import Precedences
 from src.envs.spatial_cone_env import SpatialConeEnv
 from src.evaluation.tiny_oracle import enumerate_tiny, tiny_mine
 from src.models.experimental_q_learning import ControlQLearning
@@ -15,8 +15,9 @@ class ValidationLearningTests(unittest.TestCase):
     def test_ten_seeds_learn_and_reproduce_independent_tiny_optimum(self):
         six, six_rules = tiny_mine()
         four = Mine(six.blocks[:4])
-        for mine, rules in ((four, grid9_z_up(four)), (six, six_rules)):
-            spatial = SpatialParameters("max-z", 12, True)
+        four_rules = Precedences({1: (), 2: (1, 4), 3: (2,), 4: ()})
+        for mine, rules in ((four, four_rules), (six, six_rules)):
+            spatial = SpatialParameters(12, True)
             target = enumerate_tiny(mine, rules, spatial).optimum
             for seed in range(10):
                 with self.subTest(blocks=len(mine.blocks), seed=seed):
@@ -31,7 +32,7 @@ class ValidationLearningTests(unittest.TestCase):
 
     def test_evaluation_ties_are_uniform_reproducible_and_do_not_touch_training_rng(self):
         mine, rules = tiny_mine()
-        env = SpatialConeEnv(mine, ProblemParameters(), rules, SpatialParameters("max-z", 12, True))
+        env = SpatialConeEnv(mine, ProblemParameters(), rules, SpatialParameters(12, True))
         env.step("start")
         model = ValidationQLearning(LearningParameters(), 7)
         actions = env.available_actions()
@@ -56,7 +57,7 @@ class ValidationLearningTests(unittest.TestCase):
                                             ("finite", 1, 5, "step_limit"),
                                             ("external", 1, 12, "transition_budget")):
             with self.subTest(mode=mode, cap=cap), patch("src.training.validation_runner.ValidationQLearning", PrimedModel):
-                run = train_transition_budget(mine, rules, SpatialParameters("max-z", cap, True, mode),
+                run = train_transition_budget(mine, rules, SpatialParameters(cap, True, mode),
                                               LearningParameters(alpha=1), 0, ValidationBudget(1, 1))
                 self.assertEqual(next(v for (s, a), v in run.model.q.items() if a == "start"), expected)
                 record = run.training["history"][0]
@@ -66,7 +67,7 @@ class ValidationLearningTests(unittest.TestCase):
 
     def test_external_episode_cap_is_not_stop_and_keeps_stationary_clock(self):
         mine, rules = tiny_mine()
-        spatial = SpatialParameters("max-z", 1, True, "external")
+        spatial = SpatialParameters(1, True, "external")
         env = SpatialConeEnv(mine, ProblemParameters(), rules, spatial)
         state, _, terminal = env.step("start")
         self.assertEqual(state.steps_left, 0)
@@ -85,7 +86,7 @@ class ValidationLearningTests(unittest.TestCase):
         def scripted(model, state, actions, *, explore=True):
             return "start" if state.position is None else "stop"
         with patch.object(ValidationQLearning, "select_action", scripted):
-            run = train_transition_budget(mine, rules, SpatialParameters("max-z", 12, True),
+            run = train_transition_budget(mine, rules, SpatialParameters(12, True),
                                           LearningParameters(alpha=1), 0, ValidationBudget(2, 1))
         row = run.training["history"][0]
         self.assertEqual((row["reason"], row["terminated"], row["truncated"]), ("stop", True, False))
@@ -94,7 +95,7 @@ class ValidationLearningTests(unittest.TestCase):
     def test_seed_reproducibility_ignoring_only_timings(self):
         mine, rules = tiny_mine()
         def execute():
-            return train_transition_budget(mine, rules, SpatialParameters("max-z", 12, True),
+            return train_transition_budget(mine, rules, SpatialParameters(12, True),
                                            LearningParameters(alpha=1), 3, ValidationBudget(201, 3))
         left, right = execute(), execute()
         self.assertEqual(left.model.q, right.model.q)
@@ -105,7 +106,7 @@ class ValidationLearningTests(unittest.TestCase):
 
     def test_observers_and_final_evaluation_do_not_change_learning(self):
         mine, rules = tiny_mine()
-        spatial = SpatialParameters("max-z", 12, True)
+        spatial = SpatialParameters(12, True)
         parameters = LearningParameters(alpha=1)
         run = train_transition_budget(mine, rules, spatial, parameters, 3, ValidationBudget(201, 3))
         plain = ControlQLearning(parameters, 3, "physical")
@@ -127,7 +128,7 @@ class ValidationLearningTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 ValidationBudget(*args)
         with self.assertRaises(ValueError):
-            SpatialParameters("max-z", horizon_mode="implicit")
+            SpatialParameters(horizon_mode="implicit")
 
 
 if __name__ == "__main__":

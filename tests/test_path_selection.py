@@ -2,7 +2,7 @@ import unittest
 
 from src.config import LearningParameters, ProblemParameters, SpatialParameters
 from src.data.dataset import Block, Mine
-from src.data.transforms import Precedences, grid9_z_up
+from src.data.precedences import Precedences
 from src.envs.mine_env import STOP, MineEnv
 from src.envs.spatial_cone_env import START, SpatialConeEnv
 from src.models.base import BaseModel
@@ -105,7 +105,8 @@ class PathSelectionTests(unittest.TestCase):
                      Block(3, 0, 0, 1, 15), Block(4, 0, 1, 3, -2)))
         parameters = LearningParameters(alpha=1, gamma=0.7, epsilon=0.3)
         def execute(observe):
-            env = SpatialConeEnv(mine, ProblemParameters(), grid9_z_up(mine), SpatialParameters("max-z", 30))
+            env = SpatialConeEnv(mine, ProblemParameters(), Precedences({1: (), 2: (1, 4), 3: (2,), 4: ()}),
+                                 SpatialParameters(30))
             model = SpatialQLearning(parameters, 8)
             results = []
             for episode in range(20):
@@ -118,7 +119,8 @@ class PathSelectionTests(unittest.TestCase):
     def test_spatial_revisit_is_zero_and_prefix_keeps_cone_costs(self):
         mine = Mine((Block(1, 0, 0, 3, 5), Block(2, 0, 0, 2, -4),
                      Block(3, 0, 0, 1, 15), Block(4, 4, 4, 3, -1)))
-        env = SpatialConeEnv(mine, ProblemParameters(), grid9_z_up(mine), SpatialParameters("max-z", 10))
+        env = SpatialConeEnv(mine, ProblemParameters(), Precedences({1: (), 2: (1,), 3: (2,), 4: ()}),
+                             SpatialParameters(10))
         observer = PathObserver(env, 0, "learning")
         model = ScriptedModel((START, "down", "down", "up", STOP))
         total, steps = run_episode(env, model, learn=True, on_transition=observer.observe)

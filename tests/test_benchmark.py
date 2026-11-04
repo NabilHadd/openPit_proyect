@@ -3,18 +3,25 @@ import random
 import unittest
 
 from src.config import ProblemParameters
-from src.data.dataset import Block, Mine
-from src.data.transforms import Precedences, complete_cone_candidates
+from src.data.dataset import Block, Mine, reachable_ids
+from src.data.precedences import Precedences
 from src.evaluation.benchmark import maximum_closure
 
 
 class ClosureTests(unittest.TestCase):
-    def test_complete_support_candidates_are_geometry_not_economics(self):
+    def test_reachable_blocks_are_geometry_not_economics(self):
         mine = Mine(tuple(Block(x + 7 * (y - 1) + 35 * (z - 1), x, y, z, -1)
                           for z in range(1, 4) for y in range(1, 6) for x in range(1, 8)))
-        ids = complete_cone_candidates(mine, "max-z")
+        ids = reachable_ids(mine.blocks)
         self.assertEqual(len(ids), 53)
         self.assertEqual([sum(mine.by_id[i].z == z for i in ids) for z in (1, 2, 3)], [3, 15, 35])
+
+    def test_unreachable_blocks_are_never_selected(self):
+        mine = Mine((Block(1, 0, 0, 1, -1), Block(2, 0, 0, 0, 50, reachable=False), Block(3, 1, 0, 0, 4)))
+        rules = Precedences({1: frozenset(), 2: frozenset({1}), 3: frozenset({1})})
+        result = maximum_closure(mine, rules)
+        self.assertEqual(tuple(e.block_id for e in result.plan.extractions), (1, 3))
+        self.assertEqual(result.exact_value, "3")
 
     def test_negative_predecessor_and_decimal_values(self):
         mine = Mine((Block(10, 0, 0, 0, -4.5), Block(20, 0, 0, 1, 15.25), Block(30, 1, 0, 0, -20)))

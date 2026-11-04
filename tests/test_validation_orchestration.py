@@ -40,7 +40,7 @@ class MemoryArtifacts:
 class ValidationOrchestrationTests(unittest.TestCase):
     def execute(self, *, trainer=None, benchmark=None, store=None):
         mine, rules = tiny_mine()
-        return run_validation_suite(mine, rules, SpatialParameters("max-z", 12, True), LearningParameters(),
+        return run_validation_suite(mine, rules, SpatialParameters(12, True), LearningParameters(),
                                     (0, 1), ValidationBudget(10, 3), Path("unused-validation-output"),
                                     trainer=trainer, benchmark=benchmark, store=store)
 

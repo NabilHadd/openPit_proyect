@@ -3,7 +3,7 @@ import unittest
 
 from src.config import LearningParameters, ProblemParameters, SpatialParameters
 from src.data.dataset import Block, Mine
-from src.data.transforms import grid9_z_up
+from src.data.precedences import Precedences
 from src.envs.spatial_cone_env import SpatialConeEnv, SpatialState
 from src.models.experimental_q_learning import ControlQLearning
 from src.models.q_learning import SpatialQLearning
@@ -35,7 +35,8 @@ class ControlKeyTests(unittest.TestCase):
 
     def test_construction_queries_trained_exact_key_and_six_direction_masks_match(self):
         mine = Mine((Block(1, 0, 0, 3, 5), Block(2, 0, 0, 2, -4), Block(3, 0, 0, 1, 15)))
-        env = SpatialConeEnv(mine, ProblemParameters(), grid9_z_up(mine), SpatialParameters("max-z", 20, True))
+        rules = Precedences({1: (), 2: (1,), 3: (2,)})
+        env = SpatialConeEnv(mine, ProblemParameters(), rules, SpatialParameters(20, True))
         model = ControlQLearning(LearningParameters(alpha=1), 0, "physical")
         before = env.reset(training=True)
         following, reward, done = env.step("start")

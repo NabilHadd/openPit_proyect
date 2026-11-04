@@ -1,11 +1,11 @@
-"""Experiments receive the mine and rules only, never workbook selections."""
+"""Experiments receive the mine and rules only, never the reference solution."""
 
 from dataclasses import dataclass
 from time import perf_counter
 
 from src.config import LearningParameters, ProblemParameters, SpatialParameters
 from src.data.dataset import Mine
-from src.data.transforms import Precedences
+from src.data.precedences import Precedences
 from src.envs.mine_env import MineEnv
 from src.envs.spatial_cone_env import SpatialConeEnv
 from src.models.q_learning import QLearning, SpatialQLearning

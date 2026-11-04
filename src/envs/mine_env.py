@@ -5,7 +5,7 @@ import math
 
 from src.config import ProblemParameters
 from src.data.dataset import Mine
-from src.data.transforms import Precedences
+from src.data.precedences import Precedences
 from src.evaluation.metrics import Extraction, Plan, block_usage, validate_capacity_data
 from src.training.rewards import extraction_reward
 
@@ -31,6 +31,7 @@ class MineEnv:
         self.parameters = parameters
         self.precedences = precedences
         self.blocks = mine.by_id
+        self.reachable_count = sum(b.reachable for b in mine.blocks)
         self.reset()
 
     def reset(self, *, training: bool = True) -> State:
@@ -46,7 +47,7 @@ class MineEnv:
     def _extractable(self) -> tuple[int, ...]:
         available = []
         for block_id in sorted(self.blocks):
-            if block_id in self.state.extracted:
+            if block_id in self.state.extracted or not self.blocks[block_id].reachable:
                 continue
             if not self.precedences.predecessors[block_id] <= self.state.extracted:
                 continue
@@ -59,7 +60,7 @@ class MineEnv:
         return tuple(available)
 
     def _finish_if_exhausted(self):
-        exhausted = len(self.state.extracted) == len(self.blocks)
+        exhausted = len(self.state.extracted) == self.reachable_count
         no_future = self.state.period == self.parameters.periods - 1 and not self._extractable()
         if exhausted or no_future:
             self.state = State(self.state.extracted, self.state.period, self.state.used, True)

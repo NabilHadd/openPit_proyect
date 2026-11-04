@@ -8,7 +8,9 @@ import weakref
 from unittest.mock import Mock, patch
 
 from src import validation
-from src.config import LearningParameters, SpatialParameters
+from src.config import LearningParameters, ProblemParameters, SpatialParameters
+from src.data.dataset import load_solution
+from src.evaluation.metrics import Extraction, Plan, evaluate_plan
 from src.evaluation.tiny_oracle import tiny_mine
 from src.models.validated_q_learning import ValidationQLearning
 from src.training.validation_runner import ValidationBudget, train_transition_budget
@@ -18,7 +20,7 @@ from src.training.validation_suite import evaluate_validation_benchmark, run_val
 class ValidationSuiteTests(unittest.TestCase):
     def run_suite(self, output, *, transitions=10, evaluation_rollouts=20, seeds=(0, 1), **dependencies):
         mine, rules = tiny_mine()
-        return run_validation_suite(mine, rules, SpatialParameters("max-z", 12, True), LearningParameters(alpha=1),
+        return run_validation_suite(mine, rules, SpatialParameters(12, True), LearningParameters(alpha=1),
                                     seeds, ValidationBudget(transitions, evaluation_rollouts), Path(output), **dependencies)
 
     def test_posthoc_oracle_transition_budgets_coverage_and_experimental_exports(self):
@@ -46,10 +48,13 @@ class ValidationSuiteTests(unittest.TestCase):
                 folder = directory / row["directory"]
                 for name in ("training.json", "q-table.json", "policy.json"):
                     self.assertFalse(json.loads((folder / name).read_text())["is_final_model"])
+                mine, rules = tiny_mine()
                 for role, name in row["exports"].items():
-                    exported = json.loads((folder / role / name).read_text())
-                    self.assertFalse(exported["is_final_model"])
-                    self.assertTrue(exported["evaluation"]["feasible"])
+                    exported = load_solution(folder / role / name, mine)
+                    self.assertEqual(name, "plan.csv")
+                    self.assertTrue(exported.ordered)
+                    plan = Plan(tuple(Extraction(e.block_id, e.period) for e in exported.entries))
+                    self.assertTrue(evaluate_plan(mine, plan, ProblemParameters(), rules).feasible)
 
     def test_failed_seed_does_not_compute_oracle_or_partial_success(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -126,8 +131,7 @@ class ValidationSuiteTests(unittest.TestCase):
             self.assertEqual(report["summary"]["tiny_policy_gate"], "failed")
 
     def test_invalid_args_do_not_create_successful_reports(self):
-        for extra in (["--transitions", "0"], ["--transitions", "1", "--seeds", "0", "0"],
-                      ["--transitions", "1", "--precedence", "grid9-z-up"]):
+        for extra in (["--transitions", "0"], ["--transitions", "1", "--seeds", "0", "0"]):
             with tempfile.TemporaryDirectory() as temporary:
                 args = validation.parser().parse_args([*extra, "--output", temporary])
                 with self.assertRaises(ValueError):

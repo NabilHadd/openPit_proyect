@@ -3,7 +3,7 @@ import unittest
 
 from src.config import LearningParameters, ProblemParameters, SpatialParameters
 from src.data.dataset import Block, Mine
-from src.data.transforms import grid9_z_up
+from src.data.precedences import Precedences
 from src.envs.spatial_cone_env import SpatialConeEnv, SpatialState
 from src.evaluation.experiment_metrics import ControlDiagnostics
 from src.models.experimental_q_learning import ControlQLearning
@@ -91,7 +91,8 @@ class ExperimentMetricTests(unittest.TestCase):
         mine = Mine((Block(1, 0, 0, 3, 5), Block(2, 0, 0, 2, -4),
                      Block(3, 0, 0, 1, 15), Block(4, 1, 0, 3, -1)))
         def execute(instrument):
-            env = SpatialConeEnv(mine, ProblemParameters(), grid9_z_up(mine), SpatialParameters("max-z", 20, True))
+            env = SpatialConeEnv(mine, ProblemParameters(), Precedences({1: (), 2: (1, 4), 3: (2,), 4: ()}),
+                                 SpatialParameters(20, True))
             model = ControlQLearning(LearningParameters(alpha=1, gamma=1, epsilon=0.3), 8, "physical")
             diagnostics = ControlDiagnostics(model.state_key) if instrument else None
             result = train(env, model, 10, diagnostics=diagnostics)

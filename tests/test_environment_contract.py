@@ -6,7 +6,7 @@ import unittest
 
 from src.config import ProblemParameters, SpatialParameters
 from src.data.dataset import Block, Mine
-from src.data.transforms import grid9_z_up
+from src.data.precedences import Precedences
 from src.envs.spatial_cone_env import SpatialConeEnv
 from src.evaluation.metrics import evaluate_plan
 
@@ -15,11 +15,11 @@ class EnvironmentContractTests(unittest.TestCase):
     def test_every_reachable_transition_preserves_physics_and_reward_accounting(self):
         mine = Mine((Block(1, 0, 0, 3, 5, tonnes=2), Block(2, 0, 0, 2, -4, tonnes=3),
                      Block(3, 0, 0, 1, 15, tonnes=1), Block(4, 0, 1, 3, -2, tonnes=1)))
-        rules = grid9_z_up(mine)
+        rules = Precedences({1: (), 2: (1, 4), 3: (2,), 4: ()})
         for problem in (ProblemParameters(), ProblemParameters(3, 0.15, 3),
                         ProblemParameters(3, 0.15, 4, "tonnes")):
             def make(actions=()):
-                env = SpatialConeEnv(mine, problem, rules, SpatialParameters("max-z", 8, True))
+                env = SpatialConeEnv(mine, problem, rules, SpatialParameters(8, True))
                 total = 0
                 for action in actions:
                     total += env.step(action)[1]

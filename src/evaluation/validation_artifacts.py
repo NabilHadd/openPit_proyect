@@ -49,8 +49,7 @@ class FileValidationArtifacts:
         for role, path in paths:
             destination = folder / role
             destination.mkdir()
-            name = export_checked_plan(destination, mine, path.plan, parameters=ProblemParameters(), precedences=rules,
-                                       experimental_context={**context, "selection": role})
+            name = export_checked_plan(destination, mine, path.plan, parameters=ProblemParameters(), precedences=rules)
             if name is None:
                 raise RuntimeError("El verificador rechazó un plan de validación")
             exports[role] = name

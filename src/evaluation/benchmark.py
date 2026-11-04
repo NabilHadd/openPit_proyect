@@ -10,7 +10,7 @@ from fractions import Fraction
 
 from src.config import ProblemParameters
 from src.data.dataset import Mine
-from src.data.transforms import Precedences, order_selection
+from src.data.precedences import Precedences, order_selection
 from src.evaluation.metrics import Evaluation, Extraction, Plan, evaluate_plan
 
 
@@ -27,7 +27,8 @@ def maximum_closure(mine: Mine, precedences: Precedences,
     if parameters != ProblemParameters():
         raise ValueError("Máximo cierre solo admite un período sin capacidad ni descuento")
     precedences.validate(mine)
-    ids = sorted(mine.by_id)
+    blocks = mine.by_id
+    ids = sorted(blocks)
     indices = {block_id: i for i, block_id in enumerate(ids)}
     source, sink = len(ids), len(ids) + 1
     residual = [{} for _ in range(len(ids) + 2)]
@@ -43,6 +44,8 @@ def maximum_closure(mine: Mine, precedences: Precedences,
         i, value = indices[block_id], values[block_id]
         if value > 0:
             add_edge(source, i, value)
+        if not blocks[block_id].reachable:
+            add_edge(i, sink, infinity)  # never selectable
         elif value < 0:
             add_edge(i, sink, -value)
         for predecessor in sorted(precedences.predecessors[block_id]):

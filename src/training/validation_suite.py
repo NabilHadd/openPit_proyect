@@ -7,7 +7,7 @@ from typing import Protocol
 
 from src.config import LearningParameters, SpatialParameters
 from src.data.dataset import Mine
-from src.data.transforms import Precedences
+from src.data.precedences import Precedences
 from src.evaluation.benchmark import maximum_closure
 from src.evaluation.tiny_oracle import TinyOracleResult, enumerate_tiny
 from src.evaluation.validation_artifacts import FileValidationArtifacts

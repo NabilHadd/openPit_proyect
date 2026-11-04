@@ -8,7 +8,7 @@ from dataclasses import dataclass
 import math
 
 from src.config import SpatialParameters
-from src.data.transforms import order_selection
+from src.data.precedences import order_selection
 from src.envs.mine_env import ADVANCE, STOP, MineEnv, State
 from src.evaluation.metrics import Extraction, Plan, block_usage
 from src.training.rewards import extraction_reward
@@ -37,9 +37,9 @@ class SpatialConeEnv(MineEnv):
                 cone.update(self.cones[predecessor])
             self.cones[block_id] = frozenset(cone)
         self.positions = {(b.x, b.y, b.z): b.id for b in mine.blocks}
-        surface_z = (min if spatial.surface == "min-z" else max)(b.z for b in mine.blocks)
-        self.start_id = min((b for b in mine.blocks if b.z == surface_z), key=lambda b: (-b.value, b.id)).id
-        self.down_dz = 1 if spatial.surface == "min-z" else -1
+        surface_z = max(b.z for b in mine.blocks)  # standard data: higher z = shallower
+        self.start_id = min((b for b in mine.blocks if b.z == surface_z and b.reachable),
+                            key=lambda b: (-b.value, b.id)).id
         super().__init__(mine, parameters, precedences)
 
     @property
@@ -77,7 +77,7 @@ class SpatialConeEnv(MineEnv):
             return self.start_id if action == START else None
         block = self.blocks[self.state.position]
         offsets = {"north": (-1, 0, 0), "south": (1, 0, 0), "west": (0, -1, 0),
-                   "east": (0, 1, 0), "down": (0, 0, self.down_dz), "up": (0, 0, -self.down_dz)}
+                   "east": (0, 1, 0), "down": (0, 0, -1), "up": (0, 0, 1)}
         if action not in offsets:
             return None
         dx, dy, dz = offsets[action]
@@ -89,7 +89,8 @@ class SpatialConeEnv(MineEnv):
         if self.state.position is None:
             return (START,)
         directions = DIRECTIONS if self.state.phase == "learning" or self.spatial.construction_up else DIRECTIONS[:-1]
-        actions = tuple(a for a in directions if (dest := self.destination(a)) is not None and self._fits(self._new_blocks(dest)))
+        actions = tuple(a for a in directions if (dest := self.destination(a)) is not None
+                        and self.blocks[dest].reachable and self._fits(self._new_blocks(dest)))
         if self.state.period + 1 < self.parameters.periods:
             actions += (ADVANCE,)
         return actions + (STOP,)
@@ -112,7 +113,7 @@ class SpatialConeEnv(MineEnv):
         extracted = state.extracted | frozenset(new_blocks)
         steps_left = state.steps_left - 1 if self.spatial.horizon_mode == "finite" else 0
         if reason is None:
-            if len(extracted) == len(self.blocks):
+            if len(extracted) == self.reachable_count:
                 reason = "all_extracted"
             elif self.spatial.horizon_mode == "finite" and steps_left == 0:
                 reason = "step_limit"
