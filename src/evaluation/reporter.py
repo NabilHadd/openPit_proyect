@@ -28,15 +28,15 @@ def code_provenance() -> dict:
         except (OSError, subprocess.CalledProcessError):
             return None
     status = git("status", "--porcelain", "--untracked-files=all")
-    files = [PROJECT_ROOT / name for name in ("main.py", "environment.yml", "README.md")]
-    for directory in ("src", "tests", "docs", ".github"):
+    files = [PROJECT_ROOT / name for name in ("main.py", "environment.yml")]
+    for directory in ("src", "configs"):
         files.extend(p for p in (PROJECT_ROOT / directory).rglob("*")
                      if p.is_file() and p.suffix in {".py", ".md", ".yml"})
     hashes = {str(p.relative_to(PROJECT_ROOT)): sha256(p.read_bytes()).hexdigest()
               for p in sorted(files) if p.is_file()}
     snapshot = sha256(json.dumps(hashes, sort_keys=True).encode()).hexdigest()
     return {"commit": git("rev-parse", "HEAD"), "dirty": bool(status) if status is not None else None,
-            "status": status, "source_sha256": snapshot, "file_hashes": hashes}
+            "source_sha256": snapshot}
 
 
 def runtime_metadata() -> dict:
@@ -59,21 +59,7 @@ def preparation_metadata(data_path: str) -> dict | None:
 def mine_metadata(mine: Mine) -> dict:
     return {"path": mine.source, "sha256": mine.data_sha256,
             "preparation": preparation_metadata(mine.source) if mine.source != "synthetic" else None,
-            "block_count": len(mine.blocks), "economic_units": "No declaradas en los datos; se conserva value",
-            "blocks": [{"internal_index": i, **asdict(b)} for i, b in enumerate(mine.blocks)]}
-
-
-def precedence_metadata(precedences: Precedences | None) -> dict | None:
-    if precedences is None:
-        return None
-    return {"rule": precedences.rule, "source": precedences.source,
-            "predecessors": {str(k): sorted(v) for k, v in precedences.predecessors.items()},
-            "within_period": "Predecessors must occur earlier in the ordered plan; same period allowed"}
-
-
-def plan_payload(plan: Plan) -> dict:
-    return {"schema_version": 1, "format": "openpit-internal-ordered-plan",
-            "period_origin": 0, "extractions": [asdict(e) for e in plan.extractions]}
+            "block_count": len(mine.blocks), "reachable_blocks": sum(b.reachable for b in mine.blocks)}
 
 
 PLAN_FILE = "plan.csv"

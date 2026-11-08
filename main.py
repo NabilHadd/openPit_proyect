@@ -1,82 +1,53 @@
-"""Local reproducible entry point. No reference metadata is passed to training."""
+"""Entry point. Every value lives in the YAML given by --config; the terminal only carries
+the mode, boolean flags and, for evaluate-plan, the plan to evaluate.
+
+    python main.py train --config configs/config.yml [--plot]
+    python main.py evaluate-plan --config configs/config.yml [--plan RUTA]
+"""
 
 import argparse
+from collections import Counter
 from dataclasses import asdict
-import json
 import math
 from pathlib import Path
-from time import perf_counter
+from statistics import mean
 
-from src.config import LearningParameters, ProblemParameters, SpatialParameters, project_path
+from src.config import DEFAULT_CONFIG, RunConfig, load_config, project_path
 from src.data.dataset import Mine, Solution, load_mine, load_solution
-from src.data.precedences import order_selection, pit_precedences, Precedences
-from src.evaluation.benchmark import maximum_closure
-from src.evaluation.control_report import attach_benchmark_outcome, summarize_controls, summary_markdown
+from src.data.precedences import Precedences, order_selection, pit_precedences
 from src.evaluation.metrics import Extraction, Plan, evaluate_plan
 from src.evaluation.plots import plot_history
-from src.evaluation.reporter import (code_provenance, create_run_directory, export_checked_plan,
-                                     mine_metadata, plan_payload, precedence_metadata,
-                                     q_table_payload, runtime_metadata, write_json)
-from src.models.q_learning import QLearning, SpatialQLearning
-from src.training.experiment_runner import run_experiments
-from src.training.controlled_experiments import CONTROL_SPECS, iter_control_runs, validate_controls
-
-
-DEFAULT_SOLUTION = "data/processed/solution.csv"
+from src.evaluation.reporter import (code_provenance, create_run_directory, mine_metadata, q_table_payload, runtime_metadata, write_json,
+                                     write_plan_csv)
+from src.training.trainer import train
 
 
 def parser() -> argparse.ArgumentParser:
-    result = argparse.ArgumentParser(description="Planificación minera experimental; réplica del paper pendiente")
-    result.add_argument("mode", choices=("train", "evaluate-plan", "benchmark", "experiments"))
-    result.add_argument("--data", required=True, help="CSV estándar de bloques (id,x,y,z,value[,tonnes]); relativo al repositorio o absoluto")
-    solution = result.add_mutually_exclusive_group()
-    solution.add_argument("--solution", default=DEFAULT_SOLUTION,
-                          help=f"CSV de solución de referencia (order,id,period); default={DEFAULT_SOLUTION}")
-    solution.add_argument("--no-solution", action="store_true", help="Ejecutar explícitamente sin solución de referencia")
-    result.add_argument("--periods", type=int, default=1)
-    result.add_argument("--discount-rate", type=float, default=0.0)
-    result.add_argument("--capacity", type=float)
-    result.add_argument("--capacity-unit", choices=("blocks", "tonnes"), default="blocks")
-    result.add_argument("--episodes", type=int, default=100)
-    result.add_argument("--seeds", type=int, nargs="+", help="Default experiments=0..9; otros modos=0")
-    result.add_argument("--alpha", type=float, help="Default full-state=0.2; spatial-cone/experiments=1")
-    result.add_argument("--gamma", type=float, help="Factor RL, distinto de discount-rate; full-state=1, spatial-cone=0.7; experiments fija ambos valores")
-    result.add_argument("--epsilon", type=float, help="Default full-state=0.2; spatial-cone/experiments=0.3")
-    result.add_argument("--model", choices=("full-state", "spatial-cone"), help="Solo train; default=full-state. experiments no admite este selector")
-    result.add_argument("--max-steps", type=int, help="Horizonte espacial artificial; default=500")
-    result.add_argument("--construction-up", action="store_true", help="Extensión: permitir subir también al construir; no la variante de cinco direcciones del paper")
-    result.add_argument("--exact-benchmark", action="store_true", help="Solo train: máximo cierre DESPUÉS de entrenar; sin capacidad ni descuento")
-    result.add_argument("--plan", help="evaluate-plan: CSV de plan (order,id,period); sin --plan se evalúa --solution")
-    result.add_argument("--output", default="artifacts/reports")
-    result.add_argument("--plot", action="store_true", help="Guardar curva SVG por semilla")
+    result = argparse.ArgumentParser(description="Planificación minera con Q-learning espacial")
+    modes = result.add_subparsers(dest="mode", required=True)
+    for name, text in (("train", "Entrenar un agente por semilla y exportar sus planes"),
+                       ("evaluate-plan", "Calcular el VAN y verificar la factibilidad de un plan")):
+        mode = modes.add_parser(name, help=text, description=text)
+        mode.add_argument("--config", default=DEFAULT_CONFIG, help=f"YAML de configuración; default={DEFAULT_CONFIG}")
+        if name == "train":
+            mode.add_argument("--plot", action="store_true", help="Guardar la curva de aprendizaje SVG por semilla")
+        else:
+            mode.add_argument("--plan", help="CSV del plan (order,id,period); sin --plan se evalúa la solución del YAML")
     return result
 
 
-def spatial_parameters(args, *, control: bool = False) -> SpatialParameters:
-    return SpatialParameters(500 if args.max_steps is None else args.max_steps,
-                             True if control else args.construction_up)
+def same_value(left: float, right: float) -> bool:
+    return math.isclose(left, right, rel_tol=1e-12, abs_tol=1e-6)
 
 
-def solution_file(args) -> Path | None:
-    """Default solution unless --no-solution; a missing file is an error, never a silent skip."""
-    if args.no_solution:
-        return None
-    path = project_path(args.solution)
-    if not path.is_file():
-        raise ValueError(f"No existe la solución {path}; indique --solution RUTA o use --no-solution")
-    return path
-
-
-def solution_metadata(solution: Solution) -> dict:
+def file_metadata(solution: Solution) -> dict:
     return {"path": solution.source, "sha256": solution.data_sha256, "ordered": solution.ordered,
-            "entries": [asdict(entry) for entry in solution.entries]}
+            "blocks": len(solution.entries)}
 
 
-def plan_report(mine: Mine, solution: Solution, parameters: ProblemParameters,
-                precedences: Precedences | None) -> tuple[dict, Plan]:
-    """Evaluate a plan CSV (a reference solution or any other plan). If it has no order,
-    a valid witness order is built, period by period, only to verify it."""
-    economic_value = sum(mine.by_id[i].value for i in solution.ids)
+def plan_report(mine: Mine, solution: Solution, config: RunConfig, precedences: Precedences) -> tuple[dict, Plan]:
+    """Evaluate a plan file. If it has no order, a valid witness order is built period by
+    period, only to verify it."""
     order_error = None
     if solution.ordered:
         extractions = tuple(Extraction(e.block_id, e.period) for e in solution.entries)
@@ -84,7 +55,7 @@ def plan_report(mine: Mine, solution: Solution, parameters: ProblemParameters,
         extractions, done = [], set()
         for period in sorted({e.period for e in solution.entries}):
             ids = sorted(e.block_id for e in solution.entries if e.period == period)
-            if precedences is not None and order_error is None:
+            if order_error is None:
                 try:
                     ids = order_selection(ids, precedences, done)
                 except ValueError as exc:
@@ -93,290 +64,143 @@ def plan_report(mine: Mine, solution: Solution, parameters: ProblemParameters,
             done.update(ids)
         extractions = tuple(extractions)
     plan = Plan(extractions)
-    evaluation = evaluate_plan(mine, plan, parameters, precedences)
-    return {"plan_file": solution_metadata(solution), "recalculated_raw_value": economic_value,
-            "evaluation": asdict(evaluation), "witness_order_error": order_error,
-            "order_note": ("Orden entregado por el plan" if solution.ordered else
-                           "Plan sin orden: orden testigo construido solo para verificarlo"),
-            "witness_plan": plan_payload(plan)}, plan
+    evaluation = evaluate_plan(mine, plan, config.problem, precedences)
+    return {"file": file_metadata(solution), "feasible": evaluation.feasible, "npv": evaluation.npv,
+            "raw_value": evaluation.raw_value, "period_usage": evaluation.period_usage,
+            "errors": evaluation.errors[:20], "order": "del archivo" if solution.ordered else
+            ("testigo construido para verificar" if order_error is None else f"sin orden válido: {order_error}")}, plan
 
 
-def execute_control_suite(args) -> Path:
-    if args.model is not None or args.gamma is not None or args.plan is not None:
-        raise ValueError("experiments define sus cuatro controles; no admite --model, --gamma ni --plan")
-    args.seeds = list(range(10)) if args.seeds is None else args.seeds
-    seeds = tuple(args.seeds)
-    problem = ProblemParameters(args.periods, args.discount_rate, args.capacity, args.capacity_unit)
-    spatial = spatial_parameters(args, control=True)
-    learning = LearningParameters(args.episodes, 1.0 if args.alpha is None else args.alpha,
-                                  0.7, 0.3 if args.epsilon is None else args.epsilon)
-    validate_controls(problem, spatial, seeds)
-    path = project_path(args.data)
-    mine = load_mine(path)
-    precedences = pit_precedences(mine)
-    reference_path = solution_file(args)
-    directory = create_run_directory(project_path(args.output), "experimental-controls")
-    report = {
-        "schema_version": 1, "mode": "experiments", "status": "running",
-        "purpose": "Diagnostic 2x2 controls ONLY; not a final model or validated paper replica",
-        "is_final_model": False, "benchmark_used_by_agent": False,
-        "effective_config": {"data": str(path), "seeds": seeds, "episodes": learning.episodes,
-                             "alpha": learning.alpha, "epsilon": learning.epsilon,
-                             "problem": asdict(problem), "spatial": asdict(spatial),
-                             "controls": [asdict(spec) for spec in CONTROL_SPECS]},
-        "code": code_provenance(), "runtime": runtime_metadata(), "data": mine_metadata(mine),
-        "precedences": precedence_metadata(precedences), "expected_runs": len(CONTROL_SPECS) * len(seeds),
-        "timing_scope": "Generation includes environment creation, training, greedy and passive per-transition diagnostics/verifications; excludes diagnostic aggregation, file export, plots, post-hoc benchmark and reports",
-        "phase_contract": "Identical six-direction dynamics; exact Q normalizes only phase, preserving the finite horizon",
-        "milestone_definition": "At least one verified observed path matching the compatible reference solution/benchmark across at least ten distinct seeds; no target-dependent training or stopping",
-        "runs": [],
+def base_report(mode: str, config: RunConfig, mine: Mine, precedences: Precedences) -> dict:
+    return {"schema_version": 2, "mode": mode, "config": config.as_dict(), "code": code_provenance(),
+            "runtime": runtime_metadata(), "data": mine_metadata(mine), "precedence_rule": precedences.rule}
+
+
+def load_inputs(config: RunConfig) -> tuple[Mine, Precedences]:
+    mine = load_mine(project_path(config.data))
+    return mine, pit_precedences(mine)
+
+
+def solution_path(config: RunConfig) -> Path | None:
+    if config.solution is None:
+        return None
+    path = project_path(config.solution)
+    if not path.is_file():
+        raise ValueError(f"No existe la solución {path}; corrija solution en el YAML o use solution: null")
+    return path
+
+
+def seed_row(result, directory: Path) -> dict:
+    """Write one seed's files and return its key figures for report.json."""
+    folder = directory / f"seed-{result.seed}"
+    folder.mkdir()
+    write_plan_csv(folder / "best_observed.csv", result.best_observed.plan)
+    best_rollout = max(result.policy, key=lambda r: r.evaluation.npv)  # first one among ties
+    write_plan_csv(folder / "policy_best.csv", best_rollout.plan)  # already verified in its rollout
+    decisions = sum(r.steps for r in result.policy)
+    values = [r.evaluation.npv for r in result.policy]
+    write_json(folder / "training.json", {
+        "episodes": [asdict(e) for e in result.history],
+        "policy_rollouts": [{k: v for k, v in asdict(r).items() if k != "plan"} for r in result.policy]})
+    return {
+        "seed": result.seed, "seconds": result.seconds,
+        "training": {"transitions": result.transitions, "episodes": len(result.history),
+                     "episode_ends": dict(sorted(Counter(e.end for e in result.history).items())),
+                     "unique_states": result.unique_states, "unique_pairs": result.unique_pairs,
+                     "pairs_visited_once": result.pairs_visited_once / result.unique_pairs},
+        "best_observed": {"npv": result.best_observed.evaluation.npv, "episode": result.best_observed.episode,
+                          "step": result.best_observed.step, "blocks": len(result.best_observed.plan.extractions),
+                          "file": f"{folder.name}/best_observed.csv"},
+        "policy": {"rollouts": len(values), "npv_mean": mean(values), "npv_min": min(values), "npv_max": max(values),
+                   "tie_decisions": sum(r.tie_decisions for r in result.policy) / decisions,
+                   "all_zero_decisions": sum(r.all_zero_decisions for r in result.policy) / decisions,
+                   "unseen_state_decisions": sum(r.unseen_state_decisions for r in result.policy) / decisions,
+                   "episode_cap_rollouts": sum(r.end == "episode_cap" for r in result.policy),
+                   "best_file": f"{folder.name}/policy_best.csv"},
     }
-    write_json(directory / "report.json", report)
-    expected = {(spec.id, seed) for spec in CONTROL_SPECS for seed in seeds}
-    completed = set()
-    try:
-        for run in iter_control_runs(mine, precedences, problem, spatial, learning, seeds):
-            pair = run.spec.id, run.seed
-            if pair not in expected or pair in completed or run.spec not in CONTROL_SPECS:
-                raise RuntimeError("El ejecutor emitió un control inesperado o duplicado")
-            if (run.learning.alpha, run.learning.epsilon, run.learning.episodes, run.learning.gamma) != (
-                    learning.alpha, learning.epsilon, learning.episodes, run.spec.gamma):
-                raise RuntimeError("El ejecutor cambió parámetros fuera del diseño experimental")
-            result = run.result
-            if result.selected_path is None:
-                raise RuntimeError("El control no produjo un camino observado verificado")
-            relative = Path(run.spec.id) / f"seed-{run.seed}"
-            seed_dir = directory / relative
-            seed_dir.mkdir(parents=True)
-            context = {"control": asdict(run.spec), "seed": run.seed, "purpose": "experimental-only"}
-            write_json(seed_dir / "training.json", {**asdict(result), "experimental_control": context, "is_final_model": False})
-            write_json(seed_dir / "diagnostics.json", {**run.diagnostics, "experimental_control": context, "is_final_model": False})
-            write_json(seed_dir / "q-table.json", {**q_table_payload(run.model), "experimental_control": context, "is_final_model": False})
-            exports = {}
-            for role, plan in (("selected", result.selected_path.plan), ("best-episode", result.best_plan), ("greedy", result.greedy_plan)):
-                destination = seed_dir / role
-                destination.mkdir()
-                exports[role] = export_checked_plan(destination, mine, plan, problem, precedences)
-                if exports[role] is None:
-                    raise RuntimeError("El verificador rechazó un plan del control; no se exporta como solución")
-            if args.plot:
-                plot_history(result.history, seed_dir / "training.svg")
-            report["runs"].append({
-                "control": asdict(run.spec), "seed": run.seed, "learning": asdict(run.learning),
-                "artifact_directory": str(relative), "exports": exports,
-                "generation_seconds": run.generation_seconds,
-                "diagnostic_summary_seconds": run.diagnostic_summary_seconds,
-                "best_episode_evaluation": asdict(result.best_evaluation),
-                "greedy_evaluation": asdict(result.greedy_evaluation),
-                "selected_evaluation": asdict(result.selected_path.evaluation),
-                "selected_source": {"phase": result.selected_path.phase, "episode": result.selected_path.episode,
-                                    "steps": result.selected_path.steps},
-                "diagnostics": {k: v for k, v in run.diagnostics.items() if k not in {"episodes", "definitions"}},
-            })
-            report["diagnostic_definitions"] = run.diagnostics["definitions"]
-            completed.add(pair)
-            report["completed_runs"] = len(completed)
-            write_json(directory / "report.json", report)
-        if completed != expected:
-            raise RuntimeError("La suite quedó incompleta; no se calcula una tasa de éxito parcial")
 
-        started = perf_counter()
-        benchmark = maximum_closure(mine, precedences, problem)
-        report["benchmark_seconds"] = perf_counter() - started
-        report["exact_benchmark"] = asdict(benchmark)
-        target = benchmark.evaluation.npv
-        reference_compatible = False
-        if reference_path is None:
-            report["reference_validation"] = {"status": "not_provided", "used_by_agent": False}
-        else:
-            try:
-                reference, _ = plan_report(mine, load_solution(reference_path, mine), problem, precedences)
-                report["reference_validation"] = {"status": "evaluated", "used_by_agent": False, **reference}
-                reference_compatible = (reference["evaluation"]["feasible"] is True and
-                                        math.isclose(reference["evaluation"]["npv"], target, rel_tol=1e-12, abs_tol=1e-6))
-            except (ValueError, KeyError) as exc:
-                report["reference_validation"] = {"status": "unavailable_or_invalid", "error": str(exc), "used_by_agent": False}
-        report["reference_compatible_with_benchmark"] = reference_compatible
-        for row in report["runs"]:
-            saved = json.loads((directory / row["artifact_directory"] / "training.json").read_text(encoding="utf-8"))
-            attach_benchmark_outcome(row, saved, target)
-        report["summary"] = summarize_controls(report["runs"], seeds, reference_compatible=reference_compatible)
-        report["generation_seconds"] = sum(row["generation_seconds"] for row in report["runs"])
-        report["status"] = "completed"
-        (directory / "summary.md").write_text(summary_markdown(report["summary"], target), encoding="utf-8")
-        write_json(directory / "report.json", report)
-    except Exception as exc:
-        report["status"] = "failed"
-        report["error"] = f"{type(exc).__name__}: {exc}"
-        report["completed_runs"] = len(completed)
-        write_json(directory / "report.json", report)
-        raise
-    print(f"Controles EXPERIMENTALES, no modelo final. Reporte: {directory / 'report.json'}")
-    for name, row in report["summary"]["controls"].items():
-        print(f"{name}: máximo observado={row['selected_max']:g}; éxitos benchmark={row['selected_hits']}/{row['runs']}; hito 1={row['milestone_1']}")
+
+def run_train(config: RunConfig, *, plot: bool = False) -> Path:
+    mine, precedences = load_inputs(config)
+    reference_file = solution_path(config)
+    directory = create_run_directory(project_path(config.output), "train")
+    report = base_report("train", config, mine, precedences)
+    rows, policy_values = [], []
+    for seed in config.seeds:
+        result, model = train(mine, precedences, config.problem, config.agent, config.training,
+                              config.evaluation, seed)
+        rows.append(seed_row(result, directory))
+        policy_values.append([r.evaluation.npv for r in result.policy])
+        write_json(directory / f"seed-{seed}" / "q-table.json", q_table_payload(model))
+        if plot:
+            plot_history([e.npv for e in result.history], directory / f"seed-{seed}" / "training.svg")
+
+    # The reference is read only after every seed has finished training.
+    reference = None
+    if reference_file is not None:
+        reference, _ = plan_report(mine, load_solution(reference_file, mine), config, precedences)
+        if reference["feasible"]:
+            for row, values in zip(rows, policy_values, strict=True):
+                row["best_observed"]["matches_reference"] = same_value(row["best_observed"]["npv"], reference["npv"])
+                row["policy"]["matches_reference"] = sum(same_value(v, reference["npv"]) for v in values)
+    report["reference"] = reference
+    report["seeds"] = rows
+    best = [r["best_observed"]["npv"] for r in rows]
+    summary = {"seeds": len(rows), "best_observed_max": max(best), "best_observed_mean": mean(best),
+               "policy_npv_mean": mean(r["policy"]["npv_mean"] for r in rows)}
+    if reference is not None and reference["feasible"]:
+        rollouts = config.evaluation.policy_rollouts
+        summary.update({"reference_npv": reference["npv"],
+                        "best_observed_matches": sum(r["best_observed"]["matches_reference"] for r in rows),
+                        "policy_matches": sum(r["policy"]["matches_reference"] for r in rows),
+                        "policy_rollouts": rollouts * len(rows),
+                        "seeds_policy_always_matches": sum(r["policy"]["matches_reference"] == rollouts for r in rows)})
+    report["summary"] = summary
+    write_json(directory / "report.json", report)
+
+    print(f"Reporte: {directory / 'report.json'}")
+    for row in rows:
+        policy = row["policy"]
+        print(f"Semilla {row['seed']}: mejor observado={row['best_observed']['npv']:g}; "
+              f"política media={policy['npv_mean']:g} (mín {policy['npv_min']:g}, máx {policy['npv_max']:g})")
+    if "reference_npv" in summary:
+        print(f"Referencia {summary['reference_npv']:g}: mejor observado la iguala en "
+              f"{summary['best_observed_matches']}/{len(rows)} semillas; política en "
+              f"{summary['policy_matches']}/{summary['policy_rollouts']} ejecuciones")
+    elif reference is not None:
+        print("La solución de referencia no es factible; no se compara")
+    else:
+        print("Sin solución de referencia (solution: null)")
+    return directory
+
+
+def run_evaluate_plan(config: RunConfig, plan: str | None = None) -> Path:
+    mine, precedences = load_inputs(config)
+    if plan is not None:
+        plan_file = project_path(plan)
+    else:
+        plan_file = solution_path(config)
+        if plan_file is None:
+            raise ValueError("evaluate-plan sin --plan evalúa la solución del YAML, pero solution es null")
+    evaluated, witness = plan_report(mine, load_solution(plan_file, mine), config, precedences)
+    directory = create_run_directory(project_path(config.output), "evaluate-plan")
+    report = base_report("evaluate-plan", config, mine, precedences)
+    report["plan"] = evaluated
+    if evaluated["feasible"]:
+        write_plan_csv(directory / "plan.csv", witness)  # ordered version of the evaluated plan
+    write_json(directory / "report.json", report)
+    print(f"Reporte: {directory / 'report.json'}")
+    print(f"VAN recalculado: {evaluated['npv']:g}; factible={evaluated['feasible']}")
+    for error in evaluated["errors"][:10]:
+        print(f"  - {error}")
     return directory
 
 
 def execute(args) -> Path:
-    if args.mode == "experiments":
-        return execute_control_suite(args)
-    args.model = "full-state" if args.model is None else args.model
-    args.seeds = [0] if args.seeds is None else args.seeds
-    data_path = project_path(args.data)
-    problem = ProblemParameters(args.periods, args.discount_rate, args.capacity, args.capacity_unit)
-    defaults = (1.0, 0.7, 0.3) if args.model == "spatial-cone" else (0.2, 1.0, 0.2)
-    learning = LearningParameters(args.episodes, *(default if value is None else value
-                                  for value, default in zip((args.alpha, args.gamma, args.epsilon), defaults)))
-    if len(set(args.seeds)) != len(args.seeds):
-        raise ValueError("Las semillas deben ser distintas")
-    if args.mode == "evaluate-plan" and not args.plan and args.no_solution:
-        raise ValueError("evaluate-plan sin --plan evalúa la solución; no admite --no-solution")
-    if (args.mode == "benchmark" or args.exact_benchmark) and problem != ProblemParameters():
-        raise ValueError("Máximo cierre requiere un período sin capacidad ni descuento")
-    if args.exact_benchmark and args.mode != "train":
-        raise ValueError("--exact-benchmark solo se usa en train; también existe el modo benchmark")
-    spatial = None
-    if args.model == "spatial-cone":
-        if args.mode != "train":
-            raise ValueError("--model spatial-cone solo se usa en train")
-        spatial = spatial_parameters(args)
-    elif args.max_steps is not None or args.construction_up:
-        raise ValueError("Las opciones espaciales requieren --model spatial-cone")
-    mine = load_mine(data_path)
-    precedences = pit_precedences(mine)
-    reference_path = solution_file(args) if args.mode == "train" else None
-    report = {"schema_version": 1, "mode": args.mode, "effective_config": {
-        **vars(args), "data": str(data_path), "output": str(project_path(args.output)),
-        "alpha": learning.alpha, "gamma": learning.gamma, "epsilon": learning.epsilon,
-        "problem": asdict(problem), "learning": asdict(learning),
-        "spatial": asdict(spatial) if spatial is not None else None},
-        "code": code_provenance(), "runtime": runtime_metadata(), "data": mine_metadata(mine),
-        "precedences": precedence_metadata(precedences),
-        "model": (SpatialQLearning.name if spatial else QLearning.name) if args.mode == "train" else None,
-        "paper": {"doi": "10.17159/2411-9717/1367/2021", "source": "PDF/texto aportado por usuario; pp. 647-650"},
-        "domain_confirmations": {
-            "scope": "Caso reducido 105 bloques; confirmaciones del usuario en conversación",
-            "surface": "Z máximo = superficie (formato estándar de datos)",
-            "precedence": "talud 45°: 9 bloques superiores; bloques sin cono completo inalcanzables (cliente)",
-            "reward": "B: valor incremental del conjunto nuevo; no recompensa terminal",
-            "revisits": "mover sin volver a extraer ni contabilizar",
-            "selection": "conservar camino observado de mayor VAN; permite costos negativos intermedios",
-            "still_pending": "estado Q exacto, movimientos por fase y cierre natural de episodio"},
-        "paper_replication": "partial: incremental reward, revisits, surface and pit rule confirmed; exact Q state/phase moves/episode ending pending",
-        "timing_scope": "generation_seconds incluye entrenamiento y verificación; excluye carga, metadatos, gráficos y reportes"}
-
+    config = load_config(args.config)
     if args.mode == "train":
-        experiments = run_experiments(mine, precedences, problem, learning, tuple(args.seeds), spatial)
-        if spatial is not None:
-            report["spatial_interpretation"] = {
-                "q_key": "position, period; aliased, NOT complete Markov state",
-                "learning_directions": ["north", "south", "west", "east", "down", "up"],
-                "construction_directions": ["north", "south", "west", "east", "down"] + (["up"] if spatial.construction_up else []),
-                "reward": "VAN incremental de bloques nuevos en el cono; confirmado por el usuario (B)",
-                "start": "máximo Valor en superficie declarada; empate por ID; acción inicial contabilizada",
-                "revisits": "tránsito sin extracción/recompensa/capacidad adicional",
-                "periods": "avance explícito; cono completo en un período o rechazo atómico",
-                "termination": "stop, todos extraídos o max_steps; límite artificial incluido en estado físico",
-                "selection": "mejor prefijo factible observado de learning o construction; no modifica el aprendizaje ni detiene el recorrido",
-                "client_validation": "pending; see docs/paper_mapping.md"}
-        # Only after every seed has finished do we read the reference solution.
-        comparison = {"reference": "not_provided", "reference_value": None, "reference_feasible": None,
-                      "comparable": False,
-                      "precedence_rule": precedences.rule,
-                      "runs": len(experiments), "best_episode_target_hits": None,
-                      "greedy_target_hits": None, "selected_path_target_hits": None}
-        if reference_path is not None:
-            solution = load_solution(reference_path, mine)
-            reference, _ = plan_report(mine, solution, problem, precedences)
-            report["reference"] = reference
-            target = reference["evaluation"]["npv"]
-            comparable = reference["evaluation"]["feasible"] is True
-            def hits(values):
-                return sum(math.isclose(v, target, rel_tol=1e-12, abs_tol=1e-6) for v in values) if comparable else None
-            comparison.update({
-                "reference": "evaluated", "reference_value": target,
-                "reference_feasible": reference["evaluation"]["feasible"], "comparable": comparable,
-                "best_episode_target_hits": hits(e.result.best_evaluation.npv for e in experiments),
-                "greedy_target_hits": hits(e.result.greedy_evaluation.npv for e in experiments),
-                "selected_path_target_hits": hits(e.result.selected_path.evaluation.npv for e in experiments)})
-            report["validation_metadata"] = {"solution": solution_metadata(solution), "used_by_agent": False}
-        report["comparison"] = comparison
-        if args.exact_benchmark:
-            start = perf_counter()
-            report["exact_benchmark"] = asdict(maximum_closure(mine, precedences, problem))
-            report["benchmark_seconds"] = perf_counter() - start
-            optimum = report["exact_benchmark"]["evaluation"]["npv"]
-            report["benchmark_comparison"] = {
-                "optimum": optimum,
-                "best_episode_gaps": [optimum - e.result.best_evaluation.npv for e in experiments],
-                "greedy_gaps": [optimum - e.result.greedy_evaluation.npv for e in experiments],
-                "selected_path_gaps": [optimum - e.result.selected_path.evaluation.npv for e in experiments],
-                "used_by_agent": False}
-        directory = create_run_directory(project_path(args.output), args.mode)
-        report["experiments"] = []
-        for experiment in experiments:
-            seed_dir = directory / f"seed-{experiment.seed}"
-            seed_dir.mkdir()
-            result = experiment.result
-            write_json(seed_dir / "training.json", asdict(result))
-            write_json(seed_dir / "q-table.json", q_table_payload(experiment.model))
-            best_dir, greedy_dir = seed_dir / "best", seed_dir / "greedy"
-            best_dir.mkdir()
-            greedy_dir.mkdir()
-            best_export = export_checked_plan(best_dir, mine, result.best_plan, problem, precedences)
-            greedy_export = export_checked_plan(greedy_dir, mine, result.greedy_plan, problem, precedences)
-            selected_dir = seed_dir / "selected"
-            selected_dir.mkdir()
-            selected_export = export_checked_plan(selected_dir, mine, result.selected_path.plan, problem, precedences)
-            if args.plot:
-                plot_history(result.history, seed_dir / "training.svg")
-            report["experiments"].append({"seed": experiment.seed, "generation_seconds": experiment.generation_seconds,
-                "best_episode": result.best_episode, "best_evaluation": asdict(result.best_evaluation),
-                "greedy_evaluation": asdict(result.greedy_evaluation), "best_export": best_export,
-                "greedy_export": greedy_export, "q_entries": len(experiment.model.q),
-                "greedy_termination_reason": result.greedy_termination_reason,
-                "greedy_steps": result.greedy_steps,
-                "selected_path": asdict(result.selected_path), "selected_export": selected_export,
-                "step_limit_episodes": sum(r.termination_reason == "step_limit" for r in result.history)})
-        report["generation_seconds"] = sum(e.generation_seconds for e in experiments)
-    else:
-        if args.mode == "evaluate-plan":
-            plan_path = project_path(args.plan) if args.plan else solution_file(args)
-            plan_file = load_solution(plan_path, mine)
-        start = perf_counter()
-        if args.mode == "evaluate-plan":
-            evaluated, plan = plan_report(mine, plan_file, problem, precedences)
-            report["evaluated_plan"] = evaluated
-        elif args.mode == "benchmark":
-            benchmark = maximum_closure(mine, precedences, problem)
-            report["exact_benchmark"] = asdict(benchmark)
-            report["model"] = "maximum-closure-mincut-diagnostic-not-rl"
-            plan = benchmark.plan
-        evaluation = evaluate_plan(mine, plan, problem, precedences)
-        report["generation_seconds"] = perf_counter() - start
-        report["evaluation"] = asdict(evaluation)
-        report["plan"] = plan_payload(plan)
-        directory = create_run_directory(project_path(args.output), args.mode)
-        report["plan_export"] = export_checked_plan(directory, mine, plan, problem, precedences)
-    write_json(directory / "report.json", report)
-    print(f"Reporte: {directory / 'report.json'}")
-    if args.mode == "train":
-        for entry in report["experiments"]:
-            print(f"Semilla {entry['seed']}: mejor episodio={entry['best_evaluation']['npv']:g}; "
-                  f"política greedy final={entry['greedy_evaluation']['npv']:g}; "
-                  f"camino seleccionado={entry['selected_path']['evaluation']['npv']:g}")
-        if comparison["reference"] == "evaluated":
-            print(f"Coincidencias con referencia (mejor/greedy): {comparison['best_episode_target_hits']}/{comparison['greedy_target_hits']}; "
-                  f"ejecuciones={comparison['runs']}")
-            print(f"Caminos seleccionados que coinciden con referencia: {comparison['selected_path_target_hits']}")
-        else:
-            print(f"Sin solución de referencia (--no-solution); ejecuciones={comparison['runs']}")
-    else:
-        print(f"VAN recalculado: {evaluation.npv:g}; factible={evaluation.feasible}")
-        if not evaluation.feasible:
-            for error in evaluation.errors[:10]:
-                print(f"  - {error}")
-    return directory
+        return run_train(config, plot=args.plot)
+    return run_evaluate_plan(config, args.plan)
 
 
 def main():

@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from src.config import PROJECT_ROOT, LearningParameters, ProblemParameters
+from src.config import PROJECT_ROOT, AgentParameters, ProblemParameters
 from src.data.dataset import Block, Mine, file_hash, load_mine, load_solution
 from src.data.precedences import Precedences, order_selection, pit_precedences
 from src.evaluation.benchmark import maximum_closure
@@ -17,13 +17,13 @@ class DataTests(unittest.TestCase):
     def test_parameter_validation(self):
         invalid_problems = ({"periods": 0}, {"discount_rate": float("nan")},
                             {"discount_rate": -0.1}, {"capacity": 0}, {"capacity_unit": "unknown"})
-        invalid_learning = ({"episodes": 0}, {"alpha": 0}, {"gamma": 1.1}, {"epsilon": -0.1})
+        invalid_learning = ({"state": "full"}, {"alpha": 0}, {"gamma": 1.1}, {"epsilon": -0.1})
         for parameters in invalid_problems:
             with self.subTest(parameters=parameters), self.assertRaises(ValueError):
                 ProblemParameters(**parameters)
         for parameters in invalid_learning:
             with self.subTest(parameters=parameters), self.assertRaises(ValueError):
-                LearningParameters(**parameters)
+                AgentParameters(**parameters)
 
     def test_table_and_traceability(self):
         with tempfile.TemporaryDirectory() as directory:
