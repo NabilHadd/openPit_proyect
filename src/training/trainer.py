@@ -1,146 +1,163 @@
-"""Episode orchestration, independent plan checks, and a read-only greedy rollout."""
+"""Training by transition budget, best observed plan and learned-policy rollouts.
 
+- Training runs epsilon-greedy episodes until `transitions` steps have been taken. Epsilon
+  is recomputed at every transition with the schedule of the YAML (src/models/exploration.py):
+  it starts at `epsilon` and reaches 0 when the budget runs out.
+- An episode ends for real (no future value) on stop, all reachable blocks extracted or,
+  in finite mode, the step limit. Reaching max_steps in external mode, or running out of
+  budget, only interrupts it: the last update still counts the future value.
+- Best observed: after every extraction the extracted set is a feasible plan; the one of
+  highest VAN seen during training is the plan delivered.
+- Policy: after training, the agent builds plans without exploration (always the action
+  of highest Q); ties are broken at random, so several rollouts measure consistency.
+"""
+
+from collections import Counter
 from dataclasses import dataclass
-from collections.abc import Callable
+import math
+import random
 from time import perf_counter
 
-from src.envs.mine_env import Action, MineEnv
+from src.config import AgentParameters, EvaluationParameters, ProblemParameters, TrainingParameters
+from src.data.dataset import Mine
+from src.data.precedences import Precedences
+from src.envs.mine_env import MineEnv
 from src.evaluation.metrics import Evaluation, Plan, evaluate_plan
-from src.models.base import BaseModel
+from src.models.exploration import epsilon_at
+from src.models.q_learning import QLearning
 
 
 @dataclass(frozen=True)
-class ObservedPath:
+class ObservedPlan:
     plan: Plan
     evaluation: Evaluation
-    episode: int | None
-    phase: str
-    steps: int
-    actions: tuple[Action, ...]
+    episode: int
+    step: int
 
 
 @dataclass(frozen=True)
 class EpisodeRecord:
     episode: int
-    reward_sum: float
     steps: int
+    npv: float
+    end: str  # stop | all_extracted | step_limit | episode_cap | budget
+
+
+@dataclass(frozen=True)
+class PolicyRollout:
+    rollout: int
     plan: Plan
     evaluation: Evaluation
-    actions: tuple[str, ...] = ()
-    termination_reason: str = "terminal"
-    best_path: ObservedPath | None = None
+    steps: int
+    end: str
+    tie_decisions: int
+    all_zero_decisions: int
+    unseen_state_decisions: int
 
 
 @dataclass(frozen=True)
 class TrainingResult:
+    seed: int
+    best_observed: ObservedPlan
+    policy: tuple[PolicyRollout, ...]
     history: tuple[EpisodeRecord, ...]
-    best_episode: int
-    best_plan: Plan
-    best_evaluation: Evaluation
-    greedy_plan: Plan
-    greedy_evaluation: Evaluation
-    greedy_actions: tuple[str, ...] = ()
-    greedy_termination_reason: str = "terminal"
-    greedy_steps: int = 0
-    greedy_best_path: ObservedPath | None = None
-    selected_path: ObservedPath | None = None
+    transitions: int
+    unique_states: int
+    unique_pairs: int
+    pairs_visited_once: int
+    seconds: float
 
 
-def run_episode(env: MineEnv, model: BaseModel, *, learn: bool,
-                on_transition: Callable[[int, Action], None] | None = None,
-                transition_observer: Callable | None = None) -> tuple[float, int]:
-    state = env.reset(training=learn)
-    reward_sum = 0.0
-    steps = 0
-    bound = env.episode_step_bound
-    while not state.terminal:
-        if steps >= bound:
-            raise RuntimeError("Episodio excede la cota de transiciones del entorno")
-        action = model.select_action(state, env.available_actions(), explore=learn)
-        next_state, reward, terminal = env.step(action)
-        if learn:
-            model.update(state, action, reward, next_state, env.available_actions(), terminal)
-        reward_sum += reward
-        steps += 1
-        if on_transition is not None:
-            on_transition(steps, action)
-        if transition_observer is not None:
-            transition_observer(state, action, reward, next_state)
-        state = next_state
-    return reward_sum, steps
-
-
-def checked_evaluation(env: MineEnv) -> Evaluation:
-    result = evaluate_plan(env.mine, env.plan, env.parameters, env.precedences)
+def checked_evaluation(env: MineEnv, plan: Plan | None = None) -> Evaluation:
+    result = evaluate_plan(env.mine, env.plan if plan is None else plan, env.parameters, env.precedences)
     if result.feasible is not True:
         raise RuntimeError(f"El entorno produjo un plan inválido: {result.errors}")
     return result
 
 
-class PathObserver:
-    """Observe feasible prefixes without changing actions, rewards or termination."""
-
-    def __init__(self, env: MineEnv, episode: int | None, phase: str):
-        self.env = env
-        self.episode = episode
-        self.phase = phase
-        self.actions = []
-        self.last_plan = None
-        self.best: ObservedPath | None = None
-
-    def observe(self, steps: int, action: Action):
-        self.actions.append(action)
-        self.finish(steps)
-
-    def finish(self, steps: int):
-        if self.env.plan == self.last_plan:
-            return
-        evaluation = checked_evaluation(self.env)
-        self.last_plan = self.env.plan
-        if self.best is None or evaluation.npv > self.best.evaluation.npv:
-            self.best = ObservedPath(self.env.plan, evaluation, self.episode, self.phase,
-                                     steps, tuple(self.actions))
+def _same(left: float, right: float) -> bool:
+    return math.isclose(left, right, rel_tol=1e-12, abs_tol=1e-6)
 
 
-def train(env: MineEnv, model: BaseModel, episodes: int, *, diagnostics=None) -> TrainingResult:
-    if episodes < 1:
-        raise ValueError("Se requiere al menos un episodio")
+def q_bound_violations(model: QLearning, mine: Mine) -> list[dict]:
+    """No future return can exceed the positive value still in the ground (gamma <= 1).
+
+    Only for the physical key. The position key forgets what was extracted, so it can
+    credit the same block again and again: its Q is an approximation, not a true value."""
+    if model.parameters.state != "physical":
+        return []
+    positive = {b.id: b.value for b in mine.blocks if b.value > 0}
+    violations = []
+    for (key, action), value in model.q.items():
+        extracted = getattr(key, "extracted", frozenset())
+        bound = math.fsum(v for i, v in positive.items() if i not in extracted)
+        if not math.isfinite(value) or value - bound > 1e-6:
+            violations.append({"action": action, "q": value, "upper_bound": bound})
+    return violations
+
+
+def _policy_rollout(env: MineEnv, model: QLearning, visited: set, rollout: int) -> PolicyRollout:
+    rng = random.Random(f"{model.seed}:policy:{rollout}")  # never touches the training RNG
+    state = env.reset()
+    steps = ties = zeros = unseen = 0
+    while not state.terminal and steps < env.training.max_steps:
+        actions = env.available_actions()
+        best = model.best_actions(state, actions)
+        ties += len(best) > 1
+        zeros += all(model.value(state, a) == 0 for a in actions)
+        unseen += model.state_key(state) not in visited
+        state, _, _ = env.step(rng.choice(best))
+        steps += 1
+    end = env.termination_reason if state.terminal else "episode_cap"
+    return PolicyRollout(rollout, env.plan, checked_evaluation(env), steps, end, ties, zeros, unseen)
+
+
+def train(mine: Mine, precedences: Precedences, problem: ProblemParameters, agent: AgentParameters,
+          training: TrainingParameters, evaluation: EvaluationParameters, seed: int) -> tuple[TrainingResult, QLearning]:
+    """Receives the mine and its rules only; a reference solution never reaches the agent."""
+    started = perf_counter()
+    env = MineEnv(mine, problem, precedences, training)
+    model = QLearning(agent, seed)
+    visited, pairs = set(), Counter()
     history = []
-    best = None
-    selected_path = None
-    learning_started = perf_counter() if diagnostics is not None else 0.0
-    for episode in range(episodes):
-        observer = PathObserver(env, episode, "learning")
-        trajectory = diagnostics.new_episode("learning", episode) if diagnostics is not None else None
-        reward_sum, steps = run_episode(env, model, learn=True, on_transition=observer.observe,
-                                       transition_observer=trajectory.observe if trajectory is not None else None)
-        if trajectory is not None:
-            trajectory.finish(getattr(env, "termination_reason", None), steps)
-        observer.finish(steps)
-        record = EpisodeRecord(episode, reward_sum, steps, env.plan, checked_evaluation(env),
-                               tuple(getattr(env, "action_history", ())),
-                               getattr(env, "termination_reason", "terminal"), observer.best)
-        history.append(record)
-        if best is None or record.evaluation.npv > best.evaluation.npv:
-            best = record
-        if observer.best is not None and (selected_path is None or observer.best.evaluation.npv > selected_path.evaluation.npv):
-            selected_path = observer.best
-    if diagnostics is not None:
-        diagnostics.learning_seconds = perf_counter() - learning_started
-    greedy_started = perf_counter() if diagnostics is not None else 0.0
-    observer = PathObserver(env, None, "construction")
-    trajectory = diagnostics.new_episode("construction", None) if diagnostics is not None else None
-    _, greedy_steps = run_episode(env, model, learn=False, on_transition=observer.observe,
-                                 transition_observer=trajectory.observe if trajectory is not None else None)
-    if trajectory is not None:
-        trajectory.finish(getattr(env, "termination_reason", None), greedy_steps)
-    observer.finish(greedy_steps)
-    greedy_evaluation = checked_evaluation(env)
-    if observer.best is not None and (selected_path is None or observer.best.evaluation.npv > selected_path.evaluation.npv):
-        selected_path = observer.best
-    if diagnostics is not None:
-        diagnostics.greedy_seconds = perf_counter() - greedy_started
-    return TrainingResult(tuple(history), best.episode, best.plan, best.evaluation,
-                          env.plan, greedy_evaluation, tuple(getattr(env, "action_history", ())),
-                          getattr(env, "termination_reason", "terminal"), greedy_steps,
-                          observer.best, selected_path)
+    best = None  # (npv, plan, episode, step)
+    transitions = 0
+    while transitions < training.transitions:
+        episode = len(history)
+        state = env.reset()
+        total = 0.0
+        steps = 0
+        while not state.terminal and steps < training.max_steps and transitions < training.transitions:
+            actions = env.available_actions()
+            epsilon = epsilon_at(agent.epsilon_schedule, agent.epsilon, transitions, training.transitions)
+            action = model.select_action(state, actions, epsilon)
+            key = model.state_key(state)
+            visited.add(key)
+            pairs[key, action] += 1
+            following, reward, terminal = env.step(action)
+            model.update(state, action, reward, following, env.available_actions(), terminal)
+            transitions += 1
+            steps += 1
+            if len(following.extracted) != len(state.extracted):
+                total += reward
+                if best is None or total > best[0] and not _same(total, best[0]):
+                    best = total, env.plan, episode, steps
+            state = following
+        final = checked_evaluation(env)
+        if not _same(total, final.npv):
+            raise RuntimeError("Las recompensas del episodio no coinciden con el VAN de su plan")
+        end = env.termination_reason if state.terminal else (
+            "budget" if transitions == training.transitions else "episode_cap")
+        history.append(EpisodeRecord(episode, steps, final.npv, end))
+
+    violations = q_bound_violations(model, mine)
+    if violations:
+        raise RuntimeError(f"Q supera el valor físicamente posible: {violations[:3]}")
+    best_evaluation = checked_evaluation(env, best[1])
+    if not _same(best_evaluation.npv, best[0]):
+        raise RuntimeError("El mejor plan observado no coincide con su VAN verificado")
+    observed = ObservedPlan(best[1], best_evaluation, best[2], best[3])
+    policy = tuple(_policy_rollout(env, model, visited, r) for r in range(evaluation.policy_rollouts))
+    result = TrainingResult(seed, observed, policy, tuple(history), transitions, len(visited), len(pairs),
+                            sum(count == 1 for count in pairs.values()), perf_counter() - started)
+    return result, model

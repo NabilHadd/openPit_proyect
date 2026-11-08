@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from itertools import combinations
 from math import fsum
 
-from src.config import SpatialParameters
+from src.config import TrainingParameters
 from src.data.dataset import Block, Mine
 from src.data.precedences import Precedences
 
@@ -29,7 +29,7 @@ class TinyOracleResult:
     transitions: int
 
 
-def enumerate_tiny(mine: Mine, rules: Precedences, spatial: SpatialParameters) -> TinyOracleResult:
+def enumerate_tiny(mine: Mine, rules: Precedences, training: TrainingParameters) -> TinyOracleResult:
     """Enumerate closed subsets AND reachable spatial states.
 
     The subset optimum need not be attainable from the forced start or within the
@@ -39,8 +39,6 @@ def enumerate_tiny(mine: Mine, rules: Precedences, spatial: SpatialParameters) -
     """
     if not 1 <= len(mine.blocks) <= 6:
         raise ValueError("La enumeración exhaustiva admite entre uno y seis bloques")
-    if not spatial.construction_up:
-        raise ValueError("La validación diminuta exige seis direcciones en ambas fases")
     rules.validate(mine)
     blocks = mine.by_id
     ids = tuple(blocks)
@@ -57,8 +55,8 @@ def enumerate_tiny(mine: Mine, rules: Precedences, spatial: SpatialParameters) -
     dz = -1
     offsets = {"north": (-1, 0, 0), "south": (1, 0, 0), "west": (0, -1, 0),
                "east": (0, 1, 0), "down": (0, 0, dz), "up": (0, 0, -dz)}
-    finite = spatial.horizon_mode == "finite"
-    initial = frozenset(), None, spatial.max_steps if finite else 0
+    finite = training.horizon == "finite"
+    initial = frozenset(), None, training.max_steps if finite else 0
     queue = deque([(initial, ())])
     seen = {initial}
     best = float("-inf")

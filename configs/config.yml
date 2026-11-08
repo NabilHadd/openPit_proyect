@@ -1,0 +1,58 @@
+# Configuración de una ejecución. Rutas relativas a la raíz del repositorio.
+#   python main.py train --config configs/config.yml [--plot]
+#   python main.py evaluate-plan --config configs/config.yml [--plan RUTA]
+
+data: data/processed/data.csv          # CSV estándar de bloques (id,x,y,z,value[,tonnes])
+solution: data/processed/solution.csv  # plan de referencia (order,id,period); null = sin referencia
+output: artifacts/reports              # carpeta de resultados (una subcarpeta por ejecución)
+seeds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]  # una ejecución independiente por semilla
+
+problem:                 # Variables del problema
+  periods: 1
+  discount_rate: 0.0     # tasa de descuento económica del VAN
+  capacity: null         # capacidad máxima por período; null = sin límite
+  capacity_unit: blocks  # blocks | tonnes 
+
+agent:                   # Q-learning
+  state: physical        # physical: Q recuerda posición + bloques extraídos | position: solo la posición
+  alpha: 1.0             # tasa de aprendizaje, valores entre 0 y 1 (sin el 0)
+  gamma: 1.0             # cuanto pesa el valor futuro, en [0, 1]
+  epsilon: 0.5           # azar inicial de la exploración; baja transición a transición hasta 0 al final del presupuesto
+  epsilon_schedule: linear  # forma de la bajada (src/models/exploration.py). Por ahora: linear = epsilon·(1 - t/transitions)
+
+training:
+  transitions: 100000    # presupuesto total de pasos de entrenamiento por semilla
+  max_steps: 500         # pasos maximos de un episodio para evitar ciclos infinitos
+  horizon: external      # external: max_steps solo interrumpe, el agente no ve el reloj
+                         # finite: max_steps es regla de la tarea y los pasos restantes son parte del estado
+
+evaluation:
+  policy_rollouts: 20    # planes construidos con la política aprendida.
+
+
+
+
+#Breve explicacion de las diferencias entre physical y position
+
+#physical: considera el bloque en el que se posiciona y lo extraido como un estado independiente.
+#position: Solo considera el bloque en el que se encuentra posicionado.
+
+#Breve explicacion de las diferencias entre external y finite
+
+#finite: los pasos restantes froman parte del estado. El agente ve en todo momento cuantos pasos quedan
+#external: el agente no conoce el limite de pasos, cuando llega al final, empieza un nuevo episodio
+#           considerando lo que se podría haber extraido potencialmente en las transiciones el utlimo bloque del episodio anterior
+
+
+# Conclusión: external representa de mejor manera la realidad puesto que los 500 pasos es una variable introducida solo para evitar ciclos,
+# no representa una limitante de la vida real.
+
+# Notas: La combinación postion + external genera conflictos debido a que lo unico que conoce el modelo es la posición infla las ganancias
+# y no genera planes con sentido. Esa combinación no tiene sentido.
+
+# Los problemas son asociados a position, debido a que no tiene memoria, en el caso de position + finite, se corrige debido a que finite agrega memoria.
+
+# Recordar:
+# Max_steps no es parte del problema, solo es una medida de seguridad para que el presupuesto de transitions no se acabe en un solo episodio.
+# Transitions es para definir un presupuesto medible entre todas las semillas.
+# Lo ideal sería que max_steps no interfiera en el entrenamiento. (en physical + external ningun episodio llega a los 500 steps, lo cual es el comportamiento esperado)
