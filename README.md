@@ -108,43 +108,6 @@ Cada ejecución crea `artifacts/reports/<fecha>-<modo>-<id>/` con:
 - `seed-<n>/training.json` y `q-table.json`: historial de episodios, rollouts y tabla Q.
 - `seed-<n>/training.svg`: curva de aprendizaje (solo con `--plot`).
 
-## Modelo
-
-**Precedencias.** Talud de 45° con bloques cúbicos: un bloque requiere los 9 bloques
-inmediatamente superiores. Un bloque cuyo cono superior no está completo dentro del
-modelo (bordes) es **inextraíble**. Regla confirmada por el cliente.
-
-**Entorno.** Un cursor parte en el bloque de superficie de mayor valor y se mueve en
-6 direcciones (N, S, E, O, arriba, abajo). Al llegar a un bloque nuevo extrae ese bloque
-y todo su cono pendiente, por lo que todo plan intermedio es factible. Pasar por bloques
-ya extraídos solo mueve el cursor. Acciones adicionales: `stop` y, con varios períodos,
-`advance_period`.
-
-**Recompensa.** VAN incremental de los bloques extraídos en el paso:
-`valor / (1 + discount_rate)^período`.
-
-**Q-learning.** Actualización estándar `Q ← Q + α·(r + γ·max Q(s',a') − Q)`, sin valor
-futuro cuando la tarea termina de verdad.
-
-- `state: physical`: la tabla Q distingue posición y bloques extraídos (estado markoviano).
-  `position` solo recuerda la posición; con `horizon: external` produce ciclos y no se
-  recomienda.
-- `horizon: external`: `max_steps` solo interrumpe episodios y el agente no ve el reloj.
-  `finite`: los pasos restantes son parte del estado.
-
-**Exploración.** Epsilon-greedy con epsilon recalculado en cada transición
-(`src/models/exploration.py`). `linear` baja de `epsilon` a 0 a lo largo del presupuesto;
-`constant` lo mantiene fijo, para comparar. La exploración al azar nunca elige `stop`:
-`stop` solo se elige cuando es la acción de mayor Q.
-
-**Resultado de cada semilla.**
-- *Mejor observado*: plan de mayor VAN visto durante el entrenamiento.
-- *Política*: planes construidos sin exploración siguiendo la mayor Q (los empates se
-  rompen al azar, por eso se construyen varios para medir consistencia).
-
-Todos los planes pasan por el verificador independiente (`src/evaluation/metrics.py`),
-que rechaza bloques desconocidos o repetidos, precedencias violadas, períodos inválidos
-y capacidad excedida.
 
 ## Tests
 
