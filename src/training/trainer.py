@@ -1,6 +1,8 @@
 """Training by transition budget, best observed plan and learned-policy rollouts.
 
-- Training runs epsilon-greedy episodes until `transitions` steps have been taken.
+- Training runs epsilon-greedy episodes until `transitions` steps have been taken. Epsilon
+  is recomputed at every transition with the schedule of the YAML (src/models/exploration.py):
+  it starts at `epsilon` and reaches 0 when the budget runs out.
 - An episode ends for real (no future value) on stop, all reachable blocks extracted or,
   in finite mode, the step limit. Reaching max_steps in external mode, or running out of
   budget, only interrupts it: the last update still counts the future value.
@@ -21,6 +23,7 @@ from src.data.dataset import Mine
 from src.data.precedences import Precedences
 from src.envs.mine_env import MineEnv
 from src.evaluation.metrics import Evaluation, Plan, evaluate_plan
+from src.models.exploration import epsilon_at
 from src.models.q_learning import QLearning
 
 
@@ -126,7 +129,8 @@ def train(mine: Mine, precedences: Precedences, problem: ProblemParameters, agen
         steps = 0
         while not state.terminal and steps < training.max_steps and transitions < training.transitions:
             actions = env.available_actions()
-            action = model.select_action(state, actions)
+            epsilon = epsilon_at(agent.epsilon_schedule, agent.epsilon, transitions, training.transitions)
+            action = model.select_action(state, actions, epsilon)
             key = model.state_key(state)
             visited.add(key)
             pairs[key, action] += 1

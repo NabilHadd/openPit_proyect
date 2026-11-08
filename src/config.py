@@ -6,6 +6,8 @@ from pathlib import Path
 
 import yaml
 
+from src.models.exploration import SCHEDULES
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG = "configs/config.yml"
@@ -45,11 +47,14 @@ class AgentParameters:
     state: str = "physical"
     alpha: float = 1.0
     gamma: float = 1.0
-    epsilon: float = 0.3
+    epsilon: float = 0.3              # initial epsilon of the schedule (fixed epsilon with "constant")
+    epsilon_schedule: str = "constant"   # shape of the decrease, see src/models/exploration.py
 
     def __post_init__(self):
         if self.state not in {"physical", "position"}:
             raise ValueError("state debe ser physical o position")
+        if self.epsilon_schedule not in SCHEDULES:
+            raise ValueError(f"epsilon_schedule debe ser uno de {sorted(SCHEDULES)}")
         if not 0 < self.alpha <= 1:
             raise ValueError("alpha debe estar en (0, 1]")
         if not 0 <= self.gamma <= 1 or not 0 <= self.epsilon <= 1:

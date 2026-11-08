@@ -17,7 +17,8 @@ agent:                   # Q-learning
   state: physical        # physical: Q recuerda posición + bloques extraídos | position: solo la posición
   alpha: 1.0             # tasa de aprendizaje, valores entre 0 y 1 (sin el 0)
   gamma: 1.0             # cuanto pesa el valor futuro, en [0, 1]
-  epsilon: 0.3           # azar asociado a la exploracion
+  epsilon: 0.5           # azar inicial de la exploración; baja transición a transición hasta 0 al final del presupuesto
+  epsilon_schedule: linear  # forma de la bajada (src/models/exploration.py). Por ahora: linear = epsilon·(1 - t/transitions)
 
 training:
   transitions: 100000    # presupuesto total de pasos de entrenamiento por semilla
@@ -27,6 +28,9 @@ training:
 
 evaluation:
   policy_rollouts: 20    # planes construidos con la política aprendida.
+
+
+
 
 #Breve explicacion de las diferencias entre physical y position
 

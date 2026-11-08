@@ -5,7 +5,7 @@ from collections.abc import Hashable
 from dataclasses import dataclass
 
 from src.config import AgentParameters
-from src.envs.mine_env import State
+from src.envs.mine_env import STOP, State
 from src.models.base import BaseModel
 
 
@@ -43,12 +43,18 @@ class QLearning(BaseModel):
         best = max(values)
         return tuple(a for a, v in zip(actions, values) if v == best)
 
-    def select_action(self, state: State, actions: tuple[str, ...]) -> str:
-        """Training choice: epsilon-greedy, ties broken at random with the training RNG."""
+    def select_action(self, state: State, actions: tuple[str, ...], epsilon: float) -> str:
+        """Training choice: epsilon-greedy, ties broken at random with the training RNG.
+
+        epsilon is given by the trainer at every transition (decreasing schedule). A random
+        exploration move never chooses STOP: stopping at random cut episodes short (~13
+        steps) and deep blocks were rarely reached. STOP is still chosen when it is the
+        action of highest Q."""
         if not actions:
             raise ValueError("No hay acciones disponibles")
-        if self.rng.random() < self.parameters.epsilon:
-            return self.rng.choice(actions)
+        if self.rng.random() < epsilon:
+            moves = tuple(a for a in actions if a != STOP)
+            return self.rng.choice(moves or actions)
         return self.rng.choice(self.best_actions(state, actions))
 
     def update(self, state: State, action: str, reward: float, next_state: State,
