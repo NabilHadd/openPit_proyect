@@ -13,8 +13,6 @@ from main import execute, parser
 from src.config import PROJECT_ROOT, ProblemParameters, load_config, parse_config
 from src.data.dataset import load_mine, load_solution
 from src.data.precedences import pit_precedences
-from src.evaluation.metrics import Extraction, Plan
-from src.evaluation.reporter import export_checked_plan
 
 SURFACE = range(71, 106)  # every block of Z=3 (the surface): closed and feasible
 
@@ -116,17 +114,6 @@ class CLITests(unittest.TestCase):
                     self.assertTrue(plan.ordered)
             self.assertTrue((result / "seed-9" / "training.svg").is_file())
             self.assertEqual(row["training"]["transitions"], 300)
-
-    def test_export_checked_plan_only_if_verified(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            data, _ = synthetic_inputs(directory)
-            mine = load_mine(data)
-            precedences = pit_precedences(mine)
-            plan = Plan((Extraction(105), Extraction(98)))
-            self.assertEqual(export_checked_plan(root, mine, plan, ProblemParameters(), precedences), "plan.csv")
-            self.assertEqual((root / "plan.csv").read_text(), "order,id,period\n1,105,0\n2,98,0\n")
-            self.assertIsNone(export_checked_plan(root, mine, Plan((Extraction(1),)), ProblemParameters(), precedences))
 
     def test_evaluate_plan_with_and_without_order(self):
         with tempfile.TemporaryDirectory() as directory:

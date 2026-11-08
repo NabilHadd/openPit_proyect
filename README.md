@@ -1,53 +1,48 @@
 # openPit_proyect
 
-Primera versión funcional de planificación de extracción minera con Aldo Quelopana.
-Incluye carga del libro, verificador independiente, entorno determinista, Q-learning
-tabular full-state y una variante **espacial con extracción conjunta de conos**.
-El paper de Quelopana & Navarra (2021) ya fue aportado por el usuario. La variante
-se inspira en él, pero **no es una réplica confirmada**: ciertos detalles del método
-y la correspondencia con el Excel aún requieren aclaración. No incluye Dyna-Q ni VND.
+Planificación de la extracción de una mina a cielo abierto con **Q-learning tabular**.
+El agente recorre el modelo de bloques y decide qué bloques extraer para maximizar el
+VAN del plan, respetando las precedencias del talud. La formulación se basa en
+Quelopana & Navarra (2021).
+
+Estado actual: línea base validada en el caso reducido de 105 bloques entregado por el
+cliente (VAN óptimo de referencia: 336.000).
 
 ## Estructura
 
 ```
 .
-├── main.py                        # Orquestador principal
-├── environment.yml                # Librerías para crear el entorno conda
-├── README.md                      # Descripción del proyecto
-├── .gitignore
-├── .github/
-│   └── workflows/
-│       └── tests.yml              # Pipeline de GitHub Actions: corre los tests en cada push
-├── data/                          # Datos del proyecto (no se versionan)
-│   ├── raw/                       # Datos originales (modelo de bloques)
-│   └── processed/                 # Datos transformados, listos para usar
+├── main.py                    # Punto de entrada: modos train y evaluate-plan
+├── configs/config.yml         # Configuración de una ejecución (datos, problema, agente, entrenamiento)
+├── environment.yml            # Entorno conda
+├── data/                      # Datos (no se versionan, salvo los ejemplos)
+│   ├── raw/                   # Archivos de origen (p. ej. el Excel del cliente)
+│   └── processed/             # CSV estándar que lee el pipeline (+ *.example.csv versionados)
+├── tools/                     # Conversión de archivos de origen a CSV estándar (ver tools/README.md)
 ├── src/
-│   ├── config.py                  # Hiperparámetros y variables de configuración
-│   ├── data/                      # Scripts para manejar los datos (no contiene datos)
-│   │   ├── dataset.py             # Lectura de los datos según su formato
-│   │   └── transforms.py          # Transformaciones de los datos, si son necesarias
-│   ├── envs/                      # Entornos de aprendizaje por refuerzo (no confundir con archivos .env)
-│   │   └── mine_env.py            # La mina modelada como entorno de RL: estados, acciones, recompensa y restricciones
+│   ├── config.py              # Lectura y validación del YAML
+│   ├── data/
+│   │   ├── dataset.py         # Lectura de bloques y planes; bloques alcanzables
+│   │   └── precedences.py     # Regla de precedencia del talud
+│   ├── envs/mine_env.py       # Entorno: estados, acciones, extracción de conos y recompensa
 │   ├── models/
-│   │   ├── base.py                # Interfaz común para todos los modelos
-│   │   └── q_learning.py          # Baseline Q-learning (Quelopana & Navarra, 2021)
+│   │   ├── base.py            # Interfaz común de los modelos
+│   │   ├── q_learning.py      # Q-learning tabular
+│   │   └── exploration.py     # Curvas de epsilon (exploración)
 │   ├── training/
-│   │   ├── losses.py              # Funciones de pérdida (según el método)
-│   │   ├── rewards.py             # Funciones de recompensa para los modelos de RL
-│   │   ├── trainer.py             # Rutinas de entrenamiento por modelo
-│   │   └── experiment_runner.py   # Catálogo completo de experimentos
+│   │   ├── rewards.py         # Recompensa: VAN incremental de lo extraído
+│   │   └── trainer.py         # Entrenamiento por presupuesto de transiciones y evaluación de la política
 │   └── evaluation/
-│       ├── metrics.py             # Definición de las métricas de evaluación
-│       ├── plots.py               # Generación de gráficos
-│       └── reporter.py            # Generación de reportes
-├── tests/                         # Tests automatizados
-└── artifacts/                     # Resultados generados (no se versionan)
-    ├── plots/<nombre>/            # Gráficos por modelo
-    ├── reports/<nombre>/          # Reportes por modelo
-    └── checkpoints/<nombre>/      # Modelos entrenados por modelo (p. ej. tablas Q)
+│       ├── metrics.py         # Verificador independiente de planes (factibilidad y VAN)
+│       ├── reporter.py        # report.json, planes CSV y trazabilidad
+│       ├── plots.py           # Curva de aprendizaje (SVG)
+│       ├── benchmark.py       # Óptimo exacto por máximo cierre (caso de 1 período, usado en tests)
+│       └── tiny_oracle.py     # Mina de 6 bloques con óptimo por enumeración (usado en tests)
+├── tests/                     # Tests automatizados (unittest)
+└── artifacts/reports/         # Resultados de cada ejecución (no se versionan)
 ```
 
-## Instalación y ejecución
+## Instalación
 
 ```bash
 conda env create -f environment.yml
@@ -55,255 +50,108 @@ conda activate openpit
 python -m unittest discover -s tests -v
 ```
 
-Solo se necesita `openpyxl` además de la biblioteca estándar. No se ha creado un
-entorno Conda nuevo durante el desarrollo; las verificaciones locales usaron Python
-3.13.12. CI está configurado para Python 3.12 y pruebas sintéticas, sin datos privados.
+Dependencias: Python 3.12, `pyyaml`, `pandas` y `openpyxl` (estas dos últimas solo para
+`tools/`). GitHub Actions corre los tests en cada push y pull request.
 
-El archivo local encontrado es **`Bloques105_SinRestricción.xlsx`**, no la copia
-`Bloques105_SinRestricción(1).xlsx` mencionada por Aldo. El acento del nombre local
-está descompuesto en Unicode. Estos comandos copian su nombre exacto; si se recibe
-otra copia, pasar su ruta explícitamente. Nunca se elige el primer Excel disponible.
-Las rutas relativas se resuelven desde la raíz del proyecto, no desde el directorio
-de ejecución. También se admiten rutas absolutas.
+## Datos
 
-```bash
-# Solo suma económica; factibilidad desconocida sin reglas.
-python main.py reference --data 'data/raw/Bloques105_SinRestricción.xlsx'
+El pipeline solo lee dos CSV estándar:
 
-# Factibilidad CONDICIONAL bajo una hipótesis geométrica explícita.
-python main.py reference --data 'data/raw/Bloques105_SinRestricción.xlsx' --precedence grid9-z-up
+- **Bloques** (`data/processed/data.csv`): `id,x,y,z,value[,tonnes]`, con **Z mayor = superficie**.
+- **Plan o solución** (`data/processed/solution.csv`): `order,id,period`. `order` puede ir
+  vacío si la solución es solo un conjunto de bloques.
 
-# Prueba corta de integración, no réplica científica.
-python main.py train --data 'data/raw/Bloques105_SinRestricción.xlsx' --precedence grid9-z-up --episodes 5 --seeds 0 --plot
-
-# Experimento acotado con diez semillas distintas.
-python main.py train --data 'data/raw/Bloques105_SinRestricción.xlsx' --precedence grid9-z-up --episodes 100 --seeds 0 1 2 3 4 5 6 7 8 9
-
-# Variante espacial, parámetros publicados por defecto: alpha=1, gamma=0.7, epsilon=0.3.
-# Benchmark exacto calculado DESPUÉS de terminar todas las semillas.
-python main.py train --data 'data/raw/Bloques105_SinRestricción.xlsx' --precedence grid9-z-up --model spatial-cone --episodes 1000 --max-steps 500 --seeds 0 1 2 3 4 5 6 7 8 9 --exact-benchmark
-
-# Diagnóstico exacto independiente: no lee las selecciones del Excel ni entrena.
-python main.py benchmark --data 'data/raw/Bloques105_SinRestricción.xlsx' --precedence grid9-z-up
-
-# Integración privada opcional; las pruebas normales no necesitan el Excel.
-OPENPIT_TEST_XLSX="$PWD/data/raw/Bloques105_SinRestricción.xlsx" python -m unittest discover -s tests -v
-```
-
-Cada comando crea una carpeta única bajo `artifacts/reports/`, ignorada por Git.
-`report.json` registra configuración efectiva, semillas, commit/estado local,
-huella del código y del archivo, versiones, trazabilidad fila→ID→índice interno,
-reglas, evaluaciones y tiempos. Cada semilla guarda `training.json` (planes y
-resultados por episodio, mejores prefijos, mejor episodio y rollout greedy final)
-y `q-table.json`. `selected/` guarda el camino de mayor VAN observado y verificado,
-conservando también `best/` (episodio completo) y `greedy/` (rollout completo).
-`--plot` agrega una curva SVG local del VAN por episodio. Los tiempos de generación
-incluyen entrenamiento y verificación, pero excluyen carga del Excel, metadatos,
-serialización, gráficos y reportes. No comparar esos tiempos como benchmark del paper.
-
-## Datos y validación de referencia
-
-- `load_mine` lee únicamente `105 Bloques`: exige `ID`, `X`, `Y`, `Z`, `Valor`,
-  números finitos, IDs/coordenadas únicos y coordenadas enteras; conserva fila original.
-- `load_selections` es una lectura aparte. Reconoce los paneles rotulados `Z=`, sus
-  coordenadas y sus IDs; compara rellenos sólidos con `K3`, resolviendo RGB, paleta,
-  tema y tintado. No usa índices de estilo. El adaptador visual corresponde al
-  diseño 7×5×3 de este libro; otros diseños requieren otro adaptador, no se adivinan.
-- `X-Y View`: 53 candidatos, conservados como metadatos. **No** filtran estados ni
-  acciones mientras no se confirme su significado en el paper.
-- `Resultado`: 42 seleccionados; la suma desde `Valor` es 336.000 y coincide con
-  `L13`. No proporciona orden ni períodos. La moneda y dimensiones físicas de los
-  bloques no están declaradas: no se inventan unidades.
-- La referencia nunca se pasa al entorno/modelo/entrenador. En entrenamiento, sus
-  metadatos se leen **después** de terminar todas las semillas. Una prueba altera
-  selecciones y valor declarado y comprueba que planes y tabla Q no cambian.
-
-La comprobación económica es independiente de la factibilidad. Sin precedencias,
-el verificador devuelve `feasible: null`, no `true`. La referencia puede recibir
-un **orden testigo construido** topológicamente, rotulado como tal, en un período
-sin capacidad ni descuento. Ese orden no se atribuye al Excel. Para evaluar otros
-escenarios hay que proporcionar un plan con sus períodos: no se calendariza la
-referencia visual silenciosamente.
-
-## Reglas explícitas y límites de dominio
-
-El paper documenta nueve bloques superiores (Fig. 4) y precedencias en períodos
-anteriores o iguales (p. 647). El usuario confirmó que la superficie del Excel
-reducido es **Z=3**, además de la recompensa incremental y las revisitas sin nueva
-extracción. Los bordes siguen pendientes. Entrenar sin elegir reglas se rechaza:
-
-1. `--precedence grid9-z-up`: orientación confirmada para este Excel, no elegida
-   automáticamente por la solución. Mayor Z es más superficial; cada bloque requiere los
-   bloques existentes del cuadrado 3×3 en Z+1 (incluye diagonales y el directamente
-   superior). Los bordes se recortan al dominio. Esto admite la referencia pero
-   **no confirma** el tratamiento de bordes del cliente. La factibilidad sigue
-   siendo condicional a esas reglas. `grid9-z-down` permite probar otra orientación (Z mínimo
-   superficial, como numera el paper), sin reescribir coordenadas ni valores.
-2. `--precedences-file ruta.json`: reglas explícitas suministradas por el usuario,
-   con fuente obligatoria y todos los IDs. Se comprueban referencias y ciclos.
-   `specified` significa verificado contra esas reglas, no aprobación del cliente.
-
-Formato del segundo caso, ejemplo **sintético** de dos bloques (no corresponde al Excel):
-
-```json
-{"source": "Ejemplo sintético", "predecessors": {"10": [], "20": [10]}}
-```
-
-La convención experimental es un **plan ordenado**: los predecesores deben aparecer
-antes, pero pueden estar en el mismo período. No se exige período estrictamente
-anterior. El alcance geométrico y el tratamiento de bordes aún requieren confirmación.
-
-### Baseline full-state y diferencias con el paper
-
-| Aspecto | Implementación actual | Estado respecto al paper |
-| --- | --- | --- |
-| Estado | Conjunto completo extraído, período, capacidad utilizada, terminal | No se identifica con el estado tabular de Quelopana |
-| Acciones | Extraer un ID factible, `advance_period`, `stop` | El paper describe movimientos espaciales |
-| Transición | Determinista; extraer no avanza el período; avance explícito libera capacidad | Convención experimental, pendiente de confirmar |
-| Recompensa | `Valor / (1 + discount_rate)^period`, período inicial 0; parar/avanzar dan 0 | Fórmula económica provisional, no recompensa atribuida al paper |
-| Actualización | `Q ← Q + alpha * (r + gamma * max Q(s',a') − Q)`; terminal sin bootstrap | Q-learning estándar, no prueba de réplica |
-| Exploración | Epsilon constante; epsilon-greedy con desempate aleatorio local | El paper también usa epsilon estático |
-| Terminación | Parada voluntaria, todos extraídos o sin extracciones posibles en último período | Definición del paper pendiente |
-
-Una acción inválida lanza `ValueError` antes de modificar el entorno; no recibe una
-penalización inventada. Reiniciar restaura el estado y plan. Una semilla controla
-el único generador aleatorio (`random.Random` del modelo); evaluación greedy sin
-aleatoriedad ni actualizaciones. La tabla Q es dispersa, inicialmente cero. El
-estado físico puede tener hasta 2^105 subconjuntos: esta implementación **no promete
-convergencia**. Las acciones incluyen los 105 bloques, no solo los 53 marcados.
-
-### Variante espacial con conos
-
-`--model spatial-cone` conserva el verificador y cambia las decisiones del agente:
-
-- Posición en la grilla; movimiento N/S/O/E/abajo/arriba durante aprendizaje.
-- Construcción greedy con N/S/O/E/abajo, como la lista de p. 649. La separación por
-  fase es una interpretación explícita. `--construction-up` habilita seis direcciones
-  también al construir: es una extensión diagnóstica, no la construcción publicada.
-- Inicio obligatorio en el bloque de mayor Valor de la superficie declarada; empates
-  por ID. La acción inicial cuenta en recompensas, plan y presupuesto de pasos.
-- Un destino nuevo extrae su cierre transitivo de precedencias pendiente, ordenado
-  topológicamente. Se comprueba la capacidad conjunta antes de modificar nada.
-- Se permite transitar por bloques ya extraídos con valor/capacidad adicionales cero.
-- El estado físico conserva extraídos, período, uso, posición, fase y pasos restantes.
-  La tabla Q usa **posición y período**, una proyección con aliasing, no un MDP completo.
-- Recompensa = VAN incremental del conjunto nuevo, **confirmado por el usuario
-  como opción B**. No se sustituyó por recompensa terminal ni se excluyen costos negativos.
-- Horizonte explícito `--max-steps` (default 500); cada acción consume un paso.
-  Se registra `step_limit` y se trata como terminal de este problema de horizonte
-  finito, sin bootstrap. No se presenta como convergencia ni terminación del paper.
-- Avance de período sigue siendo explícito. Los conos no se dividen ni se difieren
-  automáticamente cuando no caben. Con JSON de precedencias hay que declarar
-  `--surface min-z|max-z`; con una regla geométrica se usa su orientación y se
-  rechazan contradicciones.
-
-El baseline anterior sigue siendo el default y conserva alpha=0,2 / gamma=1 /
-epsilon=0,2. La variante espacial usa 1 / 0,7 / 0,3 salvo configuración explícita.
-Ver [`docs/paper_mapping.md`](docs/paper_mapping.md) para correspondencias y dudas.
-
-### Benchmark exacto del caso reducido
-
-`benchmark` resuelve **máximo cierre por corte mínimo**, usando capacidades racionales
-para evitar redondeo en el algoritmo. No es RL ni utiliza `Resultado`. Solo admite un
-período, sin capacidad ni descuento. Verifica el plan obtenido y guarda valor/corte
-exactos junto al VAN recalculado. `--exact-benchmark` lo ejecuta después de entrenar
-y registra las brechas; nunca alimenta la política, recompensas ni parada.
-
-Con la orientación confirmada Z máximo superficial calcula 336.000 y 42 bloques;
-con la orientación alternativa Z mínimo calcula 8.000. Son óptimos **bajo las reglas
-elegidas**, no una certificación de todos los supuestos geométricos. El diagnóstico de conos completos
-coincide con los 53 candidatos del libro (35/15/3 por profundidad), pero no se utiliza
-como máscara. El significado de esa selección y el tratamiento de bordes siguen pendientes.
-
-`--capacity` se aplica por período en `--capacity-unit blocks` o `tonnes`.
-No hay capacidad por defecto. En toneladas se exige tonelaje por bloque; el Excel
-no lo tiene y ese modo se rechaza. La API soporta tonelajes en ejemplos sintéticos.
-`--periods` limita el horizonte y `--discount-rate` es una tasa económica no negativa,
-**distinta** de `--gamma` de Q-learning. Las pruebas manuales incluyen -4 ahora y
-15 en período 1 con tasa 0,5: VAN = -4 + 15/1,5 = 6; capacidad 2+3 toneladas = 5,
-no dos toneladas por ser dos bloques.
-
-La selección final conserva el camino de mayor VAN **entre los prefijos factibles
-realmente observados** durante los episodios y el rollout greedy. Un camino puede
-continuar tras una pérdida intermedia y mejorar después: el observador no modifica
-acciones, recompensas, Q ni terminación. Tampoco necesita saber el óptimo.
-Se guardan fase, episodio, pasos y acciones exactas del prefijo. No se registra ese
-prefijo como si el episodio hubiese terminado ahí: se mantienen por separado el
-episodio completo, su mejor prefijo y el greedy completo. Los empates conservan el
-primer camino observado. También se guarda cada suma de recompensas por separado;
-el VAN siempre se recalcula desde el plan. El objetivo
-de referencia se usa solo para comparar después, nunca para cortar episodios,
-inicializar Q, filtrar acciones, formar recompensas o seleccionar el mejor plan.
-
-## Plan interno y evaluación independiente
-
-No se conoce el formato de exportación del cliente. Se guarda este formato interno
-documentado (orden de la lista = orden de extracción, períodos desde cero):
-
-```json
-{
-  "schema_version": 1,
-  "format": "openpit-internal-ordered-plan",
-  "period_origin": 0,
-  "extractions": [{"block_id": 71, "period": 0}, {"block_id": 72, "period": 0}]
-}
-```
+Los archivos de origen se convierten con los scripts de `tools/`. Por ejemplo, para el
+Excel del cliente:
 
 ```bash
-python main.py evaluate-plan --data 'data/raw/Bloques105_SinRestricción.xlsx' --precedence grid9-z-up --plan '/ruta/al/plan.json'
+python -m tools.prepare_blocks data/raw/data.xlsx --surface z-max --sheet "105 Bloques" \
+    --map ID=id X=x Y=y Z=z Valor=value
+python -m tools.extract_aldo_solution data/raw/data.xlsx
 ```
 
-El verificador detecta desconocidos, duplicados, precedencias, períodos inválidos o
-decrecientes y capacidad excedida. No repara el plan. Un valor numérico de un plan
-inválido es solo diagnóstico: su factibilidad es falsa. Sin verificación completa
-no se exporta un plan como comprobado. Con reglas provisionales se llama
-`conditional-plan.json`; con reglas explícitas, `verified-plan.json`. Ambos indican
-que la aprobación minera y compatibilidad del formato del cliente están pendientes.
+Detalle de formatos y validaciones: [`tools/README.md`](tools/README.md). Hay ejemplos
+versionados en `data/processed/*.example.csv`.
 
-## Continuidad
+## Configuración
 
-### Validación por etapas y presupuesto de transiciones
+Toda ejecución se define en un YAML (por defecto `configs/config.yml`):
 
-Nuevo punto de entrada aislado, sin cambiar los defaults de `main.py`:
+| Sección | Parámetros |
+|---|---|
+| raíz | `data`, `solution` (`null` = sin referencia), `output`, `seeds` |
+| `problem` | `periods`, `discount_rate`, `capacity` (`null` = sin límite), `capacity_unit` (`blocks` \| `tonnes`) |
+| `agent` | `state` (`physical` \| `position`), `alpha`, `gamma`, `epsilon`, `epsilon_schedule` (`linear` \| `constant`) |
+| `training` | `transitions` (presupuesto por semilla), `max_steps` (corte de seguridad por episodio), `horizon` (`external` \| `finite`) |
+| `evaluation` | `policy_rollouts` (planes construidos con la política aprendida) |
+
+Configuración de referencia: `state: physical`, `horizon: external`, `alpha: 1`, `gamma: 1`,
+`epsilon: 0.5` con `epsilon_schedule: linear`, 100.000 transiciones.
+
+## Ejecución
 
 ```bash
-# Mina de seis bloques, oráculo exhaustivo independiente, diez semillas.
-python -B -m src.validation --transitions 10000 --evaluation-rollouts 20
+# Entrena un agente por semilla y exporta sus planes
+python main.py train --config configs/config.yml [--plot]
+
+# Verifica un plan y recalcula su VAN (sin --plan evalúa la solución del YAML)
+python main.py evaluate-plan --config configs/config.yml [--plan RUTA.csv]
 ```
 
-Con gamma=1 y estado exacto, la mina pequeña pasó **200/200 evaluaciones de política
-final** (óptimo 15), no solo una búsqueda de un prefijo afortunado. Incluye desempate
-uniforme con RNG de evaluación separado, presupuesto exacto de transiciones y
-distinción entre Stop, horizonte terminal y truncamiento externo.
+Cada ejecución crea `artifacts/reports/<fecha>-<modo>-<id>/` con:
 
-En 105 bloques, 100.000 transiciones por cada una de diez semillas: **336.000 observado
-en 4/10 semillas** y reproducido en 30/200 evaluaciones de política final. Aún no es una
-política robusta: los aciertos de evaluación se concentran en dos semillas.
+- `report.json`: configuración, versión del código, hash de los datos, resultado por
+  semilla y resumen (incluida la comparación con la solución de referencia, que se lee
+  **después** de entrenar todas las semillas).
+- `seed-<n>/best_observed.csv`: mejor plan observado durante el entrenamiento.
+- `seed-<n>/policy_best.csv`: mejor plan construido con la política aprendida.
+- `seed-<n>/training.json` y `q-table.json`: historial de episodios, rollouts y tabla Q.
+- `seed-<n>/training.svg`: curva de aprendizaje (solo con `--plot`).
 
-Contrato del entorno, límites de cada interpretación, comandos para el Excel y
-resultados: [`docs/learning_validation.md`](docs/learning_validation.md).
+## Modelo
 
-### Controles experimentales VAN 2×2 (no modelo final)
+**Precedencias.** Talud de 45° con bloques cúbicos: un bloque requiere los 9 bloques
+inmediatamente superiores. Un bloque cuyo cono superior no está completo dentro del
+modelo (bordes) es **inextraíble**. Regla confirmada por el cliente.
 
-La rama `optimizacion-van` incorpora un modo separado para comparar posición/período
-frente a estado físico exacto y gamma=0,7 frente a gamma=1. Todos usan el **mismo
-entorno de conos con seis direcciones en ambas fases**, alpha=1 y epsilon=0,3 por
-defecto. No reemplaza `train` ni promueve controles al modelo final.
+**Entorno.** Un cursor parte en el bloque de superficie de mayor valor y se mueve en
+6 direcciones (N, S, E, O, arriba, abajo). Al llegar a un bloque nuevo extrae ese bloque
+y todo su cono pendiente, por lo que todo plan intermedio es factible. Pasar por bloques
+ya extraídos solo mueve el cursor. Acciones adicionales: `stop` y, con varios períodos,
+`advance_period`.
+
+**Recompensa.** VAN incremental de los bloques extraídos en el paso:
+`valor / (1 + discount_rate)^período`.
+
+**Q-learning.** Actualización estándar `Q ← Q + α·(r + γ·max Q(s',a') − Q)`, sin valor
+futuro cuando la tarea termina de verdad.
+
+- `state: physical`: la tabla Q distingue posición y bloques extraídos (estado markoviano).
+  `position` solo recuerda la posición; con `horizon: external` produce ciclos y no se
+  recomienda.
+- `horizon: external`: `max_steps` solo interrumpe episodios y el agente no ve el reloj.
+  `finite`: los pasos restantes son parte del estado.
+
+**Exploración.** Epsilon-greedy con epsilon recalculado en cada transición
+(`src/models/exploration.py`). `linear` baja de `epsilon` a 0 a lo largo del presupuesto;
+`constant` lo mantiene fijo, para comparar. La exploración al azar nunca elige `stop`:
+`stop` solo se elige cuando es la acción de mayor Q.
+
+**Resultado de cada semilla.**
+- *Mejor observado*: plan de mayor VAN visto durante el entrenamiento.
+- *Política*: planes construidos sin exploración siguiendo la mayor Q (los empates se
+  rompen al azar, por eso se construyen varios para medir consistencia).
+
+Todos los planes pasan por el verificador independiente (`src/evaluation/metrics.py`),
+que rechaza bloques desconocidos o repetidos, precedencias violadas, períodos inválidos
+y capacidad excedida.
+
+## Tests
 
 ```bash
-python -B main.py experiments --data 'data/raw/Bloques105_SinRestricción.xlsx' --precedence grid9-z-up --episodes 1000 --max-steps 500 --seeds 0 1 2 3 4 5 6 7 8 9
+python -m unittest discover -s tests -v
 ```
 
-El reporte guarda éxito/gap y primer hit post hoc, métricas de reutilización y
-cobertura de Q, retornos de navegación, pasos sin extracción, causas de cierre y
-tiempos por fase. Referencia y benchmark se consultan **después** de completar toda
-la suite. Una suite incompleta queda fallida, sin tasas de éxito parciales.
-
-Se ejecutaron 40 ensayos de 1.000 episodios: mejor camino 326.000 (42 positivos y
-un bloque de −10.000); ningún control alcanzó 336.000. Estos controles son diagnósticos,
-no una propuesta de modelo final. Protocolo, comandos, métricas y lectura de los
-resultados: [`docs/controlled_experiments.md`](docs/controlled_experiments.md).
-
-Ver [`docs/continuity.md`](docs/continuity.md) para resultados ejecutados, limitaciones
-y próximos insumos necesarios. Mantener intacto el Excel original. Datos y artefactos
-locales no se versionan.
+Incluyen una mina de 6 bloques cuyo óptimo se obtiene por enumeración exhaustiva: en
+10 semillas, el mejor plan observado debe alcanzarlo en todas las combinaciones de estado
+y horizonte, y la política también, con `state: physical`.

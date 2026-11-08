@@ -3,7 +3,6 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 .pytest_cache/
-graphify-out/
 
 # Entornos y variables de entorno
 .venv/
@@ -25,7 +24,5 @@ data/processed/*
 !data/processed/*.example.csv
 
 # Artefactos generados (se conserva la estructura con .gitkeep)
-artifacts/plots/*
 artifacts/reports/*
-artifacts/checkpoints/*
 !artifacts/**/.gitkeep

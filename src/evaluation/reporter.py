@@ -13,8 +13,7 @@ from uuid import uuid4
 
 from src.config import PROJECT_ROOT
 from src.data.dataset import SOLUTION_COLUMNS, Mine
-from src.data.precedences import Precedences
-from src.evaluation.metrics import Plan, evaluate_plan
+from src.evaluation.metrics import Plan
 
 
 def write_json(path: Path, payload):
@@ -62,26 +61,12 @@ def mine_metadata(mine: Mine) -> dict:
             "block_count": len(mine.blocks), "reachable_blocks": sum(b.reachable for b in mine.blocks)}
 
 
-PLAN_FILE = "plan.csv"
-
-
 def write_plan_csv(path: Path, plan: Plan) -> None:
     """Ordered plan -> standard plan CSV (order,id,period), the same format as a solution."""
     with Path(path).open("w", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle)
         writer.writerow(SOLUTION_COLUMNS)
         writer.writerows((order, e.block_id, e.period) for order, e in enumerate(plan.extractions, start=1))
-
-
-def export_checked_plan(directory: Path, mine: Mine, plan: Plan, parameters,
-                        precedences: Precedences | None) -> str | None:
-    """Write the plan only if the independent verifier accepts it. Its evaluation belongs
-    in the run's report.json, not in the CSV."""
-    evaluation = evaluate_plan(mine, plan, parameters, precedences)
-    if evaluation.feasible is not True:
-        return None
-    write_plan_csv(directory / PLAN_FILE, plan)
-    return PLAN_FILE
 
 
 def q_table_payload(model) -> dict:
