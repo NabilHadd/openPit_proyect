@@ -1,8 +1,8 @@
 """Training by transition budget, best observed plan and learned-policy rollouts.
 
 - Training runs epsilon-greedy episodes until `transitions` steps have been taken. Epsilon
-  is recomputed at every transition with the schedule of the YAML (src/models/exploration.py):
-  it starts at `epsilon` and reaches 0 when the budget runs out.
+  is recomputed at every transition with the schedule of configs/q_learning.yml
+  (src/models/exploration.py): it starts at `epsilon` and reaches 0 when the budget runs out.
 - An episode ends for real (no future value) on stop, all reachable blocks extracted or,
   in finite mode, the step limit. Reaching max_steps in external mode, or running out of
   budget, only interrupts it: the last update still counts the future value.
@@ -18,7 +18,8 @@ import math
 import random
 from time import perf_counter
 
-from src.config import AgentParameters, EvaluationParameters, ProblemParameters, TrainingParameters
+from configs.config_settings import EnvironmentParameters, ProblemParameters
+from configs.q_learning_settings import QLearningParams
 from src.data.dataset import Mine
 from src.data.precedences import Precedences
 from src.envs.mine_env import MineEnv
@@ -100,7 +101,7 @@ def _policy_rollout(env: MineEnv, model: QLearning, visited: set, rollout: int) 
     rng = random.Random(f"{model.seed}:policy:{rollout}")  # never touches the training RNG
     state = env.reset()
     steps = ties = zeros = unseen = 0
-    while not state.terminal and steps < env.training.max_steps:
+    while not state.terminal and steps < env.environment.max_steps:
         actions = env.available_actions()
         best = model.best_actions(state, actions)
         ties += len(best) > 1
@@ -112,24 +113,24 @@ def _policy_rollout(env: MineEnv, model: QLearning, visited: set, rollout: int) 
     return PolicyRollout(rollout, env.plan, checked_evaluation(env), steps, end, ties, zeros, unseen)
 
 
-def train(mine: Mine, precedences: Precedences, problem: ProblemParameters, agent: AgentParameters,
-          training: TrainingParameters, evaluation: EvaluationParameters, seed: int) -> tuple[TrainingResult, QLearning]:
+def train(mine: Mine, precedences: Precedences, problem: ProblemParameters, environment: EnvironmentParameters,
+          params: QLearningParams, seed: int) -> tuple[TrainingResult, QLearning]:
     """Receives the mine and its rules only; a reference solution never reaches the agent."""
     started = perf_counter()
-    env = MineEnv(mine, problem, precedences, training)
-    model = QLearning(agent, seed)
+    env = MineEnv(mine, problem, precedences, environment)
+    model = QLearning(params, seed)
     visited, pairs = set(), Counter()
     history = []
     best = None  # (npv, plan, episode, step)
     transitions = 0
-    while transitions < training.transitions:
+    while transitions < params.transitions:
         episode = len(history)
         state = env.reset()
         total = 0.0
         steps = 0
-        while not state.terminal and steps < training.max_steps and transitions < training.transitions:
+        while not state.terminal and steps < environment.max_steps and transitions < params.transitions:
             actions = env.available_actions()
-            epsilon = epsilon_at(agent.epsilon_schedule, agent.epsilon, transitions, training.transitions)
+            epsilon = epsilon_at(params.epsilon_schedule, params.epsilon, transitions, params.transitions)
             action = model.select_action(state, actions, epsilon)
             key = model.state_key(state)
             visited.add(key)
@@ -147,7 +148,7 @@ def train(mine: Mine, precedences: Precedences, problem: ProblemParameters, agen
         if not _same(total, final.npv):
             raise RuntimeError("Las recompensas del episodio no coinciden con el VAN de su plan")
         end = env.termination_reason if state.terminal else (
-            "budget" if transitions == training.transitions else "episode_cap")
+            "budget" if transitions == params.transitions else "episode_cap")
         history.append(EpisodeRecord(episode, steps, final.npv, end))
 
     violations = q_bound_violations(model, mine)
@@ -157,7 +158,7 @@ def train(mine: Mine, precedences: Precedences, problem: ProblemParameters, agen
     if not _same(best_evaluation.npv, best[0]):
         raise RuntimeError("El mejor plan observado no coincide con su VAN verificado")
     observed = ObservedPlan(best[1], best_evaluation, best[2], best[3])
-    policy = tuple(_policy_rollout(env, model, visited, r) for r in range(evaluation.policy_rollouts))
+    policy = tuple(_policy_rollout(env, model, visited, r) for r in range(params.policy_rollouts))
     result = TrainingResult(seed, observed, policy, tuple(history), transitions, len(visited), len(pairs),
                             sum(count == 1 for count in pairs.values()), perf_counter() - started)
     return result, model

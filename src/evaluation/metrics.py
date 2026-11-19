@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 import math
 
-from src.config import ProblemParameters
+from configs.config_settings import ProblemParameters
 from src.data.dataset import Mine
 from src.data.precedences import Precedences
 from src.training.rewards import discounted_value

@@ -11,7 +11,7 @@ import subprocess
 import sys
 from uuid import uuid4
 
-from src.config import PROJECT_ROOT
+from configs import PROJECT_ROOT
 from src.data.dataset import SOLUTION_COLUMNS, Mine
 from src.evaluation.metrics import Plan
 

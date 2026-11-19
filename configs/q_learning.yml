@@ -1,0 +1,39 @@
+# Hiperparámetros de Q-learning tabular. El problema, los datos y el entorno están en
+# configs/config.yml; aquí solo va cómo aprende el modelo.
+
+params:
+  state: physical        # physical: Q recuerda posición + bloques extraídos | position: solo la posición
+  alpha: 1.0             # tasa de aprendizaje, valores entre 0 y 1 (sin el 0)
+  gamma: 1.0             # cuanto pesa el valor futuro, en [0, 1]
+  epsilon: 0.5           # azar inicial de la exploración; baja transición a transición hasta 0 al final del presupuesto
+  epsilon_schedule: linear  # forma de la bajada (src/models/exploration.py). Por ahora: linear = epsilon·(1 - t/transitions)
+  transitions: 100000    # presupuesto total de pasos de entrenamiento por semilla
+  policy_rollouts: 20    # planes construidos con la política aprendida.
+
+tuning:                  # modo tuning por búsqueda aleatoria (aún no implementado)
+  distributions:         # parámetros de params a ajustar; los que no aparecen quedan fijos en su valor de params
+    alpha: {distribution: loguniform, low: 0.01, high: 1.0}
+    epsilon: {distribution: uniform, low: 0.1, high: 0.9}
+    epsilon_schedule: {distribution: choice, values: [constant, linear]}
+  # Distribuciones disponibles:
+  #   uniform:    {distribution: uniform, low: A, high: B}     cualquier valor en [A, B], todos con la misma probabilidad
+  #   loguniform: {distribution: loguniform, low: A, high: B}  uniforme en escala logarítmica (A > 0): cada orden de magnitud pesa lo mismo
+  #   choice:     {distribution: choice, values: [...]}        uno de los valores, todos con la misma probabilidad
+  # En notación científica escribe 1.0e-3, no 1e-3: YAML lee 1e-3 como texto.
+  # transitions y policy_rollouts no se ajustan: son el presupuesto y la evaluación, iguales para toda configuración.
+
+
+
+
+#Breve explicacion de las diferencias entre physical y position
+
+#physical: considera el bloque en el que se posiciona y lo extraido como un estado independiente.
+#position: Solo considera el bloque en el que se encuentra posicionado.
+
+# Notas: La combinación postion + external genera conflictos debido a que lo unico que conoce el modelo es la posición infla las ganancias
+# y no genera planes con sentido. Esa combinación no tiene sentido.
+
+# Los problemas son asociados a position, debido a que no tiene memoria, en el caso de position + finite, se corrige debido a que finite agrega memoria.
+
+# Recordar:
+# Transitions es para definir un presupuesto medible entre todas las semillas.

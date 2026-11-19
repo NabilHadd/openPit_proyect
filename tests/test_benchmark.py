@@ -2,7 +2,7 @@ from itertools import combinations
 import random
 import unittest
 
-from src.config import ProblemParameters
+from configs.config_settings import ProblemParameters
 from src.data.dataset import Block, Mine, reachable_ids
 from src.data.precedences import Precedences
 from src.evaluation.benchmark import maximum_closure

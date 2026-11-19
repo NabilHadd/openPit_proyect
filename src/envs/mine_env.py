@@ -9,7 +9,7 @@ building a plan with the learned policy.
 from dataclasses import dataclass
 import math
 
-from src.config import ProblemParameters, TrainingParameters
+from configs.config_settings import EnvironmentParameters, ProblemParameters
 from src.data.dataset import Mine
 from src.data.precedences import Precedences, order_selection
 from src.evaluation.metrics import Extraction, Plan, block_usage, validate_capacity_data
@@ -37,12 +37,12 @@ class State:
 
 class MineEnv:
     def __init__(self, mine: Mine, problem: ProblemParameters, precedences: Precedences,
-                 training: TrainingParameters):
+                 environment: EnvironmentParameters):
         precedences.validate(mine)
         validate_capacity_data(mine, problem)
-        self.mine, self.parameters, self.precedences, self.training = mine, problem, precedences, training
+        self.mine, self.parameters, self.precedences, self.environment = mine, problem, precedences, environment
         self.blocks = mine.by_id
-        self.finite = training.horizon == "finite"
+        self.finite = environment.horizon == "finite"
         self.reachable_count = sum(b.reachable for b in mine.blocks)
         self.order = order_selection(mine.by_id, precedences)
         self.cones = {}
@@ -58,7 +58,7 @@ class MineEnv:
         self.reset()
 
     def reset(self) -> State:
-        self.state = State(frozenset(), 0, 0.0, None, self.training.max_steps if self.finite else 0)
+        self.state = State(frozenset(), 0, 0.0, None, self.environment.max_steps if self.finite else 0)
         self.plan = Plan()
         self.action_history = ()
         self.termination_reason = None

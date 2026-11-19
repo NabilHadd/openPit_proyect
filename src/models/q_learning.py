@@ -4,7 +4,7 @@ import random
 from collections.abc import Hashable
 from dataclasses import dataclass
 
-from src.config import AgentParameters
+from configs.q_learning_settings import QLearningParams
 from src.envs.mine_env import STOP, State
 from src.models.base import BaseModel
 
@@ -21,7 +21,7 @@ class PositionKey:
 class QLearning(BaseModel):
     name = "spatial-cone-q-learning"
 
-    def __init__(self, parameters: AgentParameters, seed: int):
+    def __init__(self, parameters: QLearningParams, seed: int):
         self.parameters = parameters
         self.seed = seed
         self.rng = random.Random(seed)

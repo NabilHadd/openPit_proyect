@@ -13,14 +13,18 @@ cliente (VAN óptimo de referencia: 336.000).
 ```
 .
 ├── main.py                    # Punto de entrada: modos train y evaluate-plan
-├── configs/config.yml         # Configuración de una ejecución (datos, problema, agente, entrenamiento)
+├── configs/                   # Un YAML + un módulo de lectura por tema (ver Configuración)
+│   ├── __init__.py            # PROJECT_ROOT, rutas y lectura estricta común
+│   ├── config.yml             # Común a todos los modelos: datos, problema, entorno, semillas
+│   ├── config_settings.py
+│   ├── q_learning.yml         # Hiperparámetros de Q-learning y sus distribuciones de tuning
+│   └── q_learning_settings.py
 ├── environment.yml            # Entorno conda
 ├── data/                      # Datos (no se versionan, salvo los ejemplos)
 │   ├── raw/                   # Archivos de origen (p. ej. el Excel del cliente)
 │   └── processed/             # CSV estándar que lee el pipeline (+ *.example.csv versionados)
 ├── tools/                     # Conversión de archivos de origen a CSV estándar (ver tools/README.md)
 ├── src/
-│   ├── config.py              # Lectura y validación del YAML
 │   ├── data/
 │   │   ├── dataset.py         # Lectura de bloques y planes; bloques alcanzables
 │   │   └── precedences.py     # Regla de precedencia del talud
@@ -50,8 +54,8 @@ conda activate openpit
 python -m unittest discover -s tests -v
 ```
 
-Dependencias: Python 3.12, `pyyaml`, `pandas` y `openpyxl` (estas dos últimas solo para
-`tools/`). GitHub Actions corre los tests en cada push y pull request.
+Dependencias: Python 3.12, `pyyaml`, `scikit-learn`, `pandas` y `openpyxl` (estas dos
+últimas solo para `tools/`). GitHub Actions corre los tests en cada push y pull request.
 
 ## Datos
 
@@ -75,15 +79,27 @@ versionados en `data/processed/*.example.csv`.
 
 ## Configuración
 
-Toda ejecución se define en un YAML (por defecto `configs/config.yml`):
+Toda ejecución se define en el YAML común que recibe `--config` (por defecto
+`configs/config.yml`). Ese archivo indica qué modelo correr y dónde están sus hiperparámetros.
+Todo lo que define la tarea va en el común y lo que define cómo aprende un modelo va en el
+YAML del modelo. Una clave desconocida, en cualquiera de los dos, es un error.
+
+`configs/config.yml` (común):
 
 | Sección | Parámetros |
 |---|---|
 | raíz | `data`, `solution` (`null` = sin referencia), `output`, `seeds` |
 | `problem` | `periods`, `discount_rate`, `capacity` (`null` = sin límite), `capacity_unit` (`blocks` \| `tonnes`) |
-| `agent` | `state` (`physical` \| `position`), `alpha`, `gamma`, `epsilon`, `epsilon_schedule` (`linear` \| `constant`) |
-| `training` | `transitions` (presupuesto por semilla), `max_steps` (corte de seguridad por episodio), `horizon` (`external` \| `finite`) |
-| `evaluation` | `policy_rollouts` (planes construidos con la política aprendida) |
+| `environment` | `max_steps` (corte de seguridad por episodio), `horizon` (`external` \| `finite`) |
+| `model`, `models` | modelo a entrenar y ruta del YAML de cada modelo (por ahora solo `q_learning`) |
+| `tuning` | búsqueda aleatoria del modo tuning (aún no implementado), igual para todos los modelos: `n_iter` (configuraciones sorteadas), `search_seed` (semilla del sorteo), `seeds` (semillas de entrenamiento de cada configuración; no pueden repetir `seeds`) |
+
+`configs/q_learning.yml`:
+
+| Sección | Parámetros |
+|---|---|
+| `params` | `state` (`physical` \| `position`), `alpha`, `gamma`, `epsilon`, `epsilon_schedule` (`linear` \| `constant`), `transitions` (presupuesto por semilla), `policy_rollouts` (planes construidos con la política aprendida) |
+| `tuning.distributions` | distribución de cada parámetro de `params` a ajustar: `uniform` y `loguniform` (`low`, `high`) o `choice` (`values`); los que no aparecen quedan fijos. Se valida al leer el archivo. `transitions` y `policy_rollouts` no se ajustan |
 
 Configuración de referencia: `state: physical`, `horizon: external`, `alpha: 1`, `gamma: 1`,
 `epsilon: 0.5` con `epsilon_schedule: linear`, 100.000 transiciones.
@@ -100,9 +116,9 @@ python main.py evaluate-plan --config configs/config.yml [--plan RUTA.csv]
 
 Cada ejecución crea `artifacts/reports/<fecha>-<modo>-<id>/` con:
 
-- `report.json`: configuración, versión del código, hash de los datos, resultado por
-  semilla y resumen (incluida la comparación con la solución de referencia, que se lee
-  **después** de entrenar todas las semillas).
+- `report.json`: configuración común, modelo y sus hiperparámetros (`model`), versión del
+  código, hash de los datos, resultado por semilla y resumen (incluida la comparación con la
+  solución de referencia, que se lee **después** de entrenar todas las semillas).
 - `seed-<n>/best_observed.csv`: mejor plan observado durante el entrenamiento.
 - `seed-<n>/policy_best.csv`: mejor plan construido con la política aprendida.
 - `seed-<n>/training.json` y `q-table.json`: historial de episodios, rollouts y tabla Q.

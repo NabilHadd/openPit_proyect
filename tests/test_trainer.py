@@ -2,7 +2,8 @@ from dataclasses import replace
 import unittest
 from unittest.mock import patch
 
-from src.config import AgentParameters, EvaluationParameters, ProblemParameters, TrainingParameters
+from configs.config_settings import EnvironmentParameters, ProblemParameters
+from configs.q_learning_settings import QLearningParams
 from src.data.dataset import Mine
 from src.data.precedences import Precedences
 from src.envs.mine_env import MineEnv
@@ -11,9 +12,9 @@ from src.models.q_learning import PositionKey, QLearning
 from src.training.trainer import train
 
 
-def run(mine, rules, *, agent=AgentParameters(), training=TrainingParameters(10_000, 12, "finite"),
-        rollouts=20, seed=0, problem=ProblemParameters()):
-    return train(mine, rules, problem, agent, training, EvaluationParameters(rollouts), seed)
+def run(mine, rules, *, params=QLearningParams(transitions=10_000), environment=EnvironmentParameters(12, "finite"),
+        seed=0, problem=ProblemParameters()):
+    return train(mine, rules, problem, environment, params, seed)
 
 
 class TrainerTests(unittest.TestCase):
@@ -25,11 +26,12 @@ class TrainerTests(unittest.TestCase):
             for horizon in ("finite", "external"):
                 # external + gamma=1: moving without extracting is free, so a tight cap
                 # can interrupt a wandering rollout; the cap must leave room.
-                training = TrainingParameters(10_000, 12 if horizon == "finite" else 50, horizon)
-                target = enumerate_tiny(mine, rules, training).optimum
+                environment = EnvironmentParameters(12 if horizon == "finite" else 50, horizon)
+                target = enumerate_tiny(mine, rules, environment).optimum
                 for seed in range(10):
                     with self.subTest(state=state, horizon=horizon, seed=seed):
-                        result, _ = run(mine, rules, agent=AgentParameters(state=state), training=training, seed=seed)
+                        result, _ = run(mine, rules, params=QLearningParams(state=state, transitions=10_000),
+                                        environment=environment, seed=seed)
                         self.assertEqual(result.transitions, 10_000)
                         self.assertEqual(sum(e.steps for e in result.history), 10_000)
                         self.assertEqual(result.best_observed.evaluation.npv, target)
@@ -39,18 +41,18 @@ class TrainerTests(unittest.TestCase):
 
     def test_position_key_with_gamma_one_overestimates_and_is_not_bound_checked(self):
         mine, rules = tiny_mine()
-        _, model = run(mine, rules, agent=AgentParameters(state="position"),
-                       training=TrainingParameters(10_000, 50, "external"), rollouts=1)
+        _, model = run(mine, rules, params=QLearningParams(state="position", transitions=10_000, policy_rollouts=1),
+                       environment=EnvironmentParameters(50, "external"))
         self.assertGreater(max(model.q.values()), sum(b.value for b in mine.blocks if b.value > 0))
 
     def test_position_key_keeps_the_clock_only_in_finite_mode(self):
         mine, rules = tiny_mine()
-        model = QLearning(AgentParameters(state="position"), 0)
+        model = QLearning(QLearningParams(state="position"), 0)
         for horizon, clock in (("finite", 11), ("external", 0)):
-            env = MineEnv(mine, ProblemParameters(), rules, TrainingParameters(1, 12, horizon))
+            env = MineEnv(mine, ProblemParameters(), rules, EnvironmentParameters(12, horizon))
             state, _, _ = env.step("start")
             self.assertEqual(model.state_key(state), PositionKey(state.position, 0, clock))
-        physical = QLearning(AgentParameters(), 0)
+        physical = QLearning(QLearningParams(), 0)
         other = replace(state, extracted=frozenset())
         self.assertNotEqual(physical.state_key(state), physical.state_key(other))
         self.assertEqual(model.state_key(state), model.state_key(other))
@@ -68,20 +70,22 @@ class TrainerTests(unittest.TestCase):
                                             ("finite", 1, start_value, "step_limit"),
                                             ("external", 1, start_value + 7, "budget")):
             with self.subTest(horizon=horizon, cap=cap), patch("src.training.trainer.QLearning", Primed):
-                result, model = run(mine, rules, training=TrainingParameters(1, cap, horizon), rollouts=1)
+                result, model = run(mine, rules, params=QLearningParams(transitions=1, policy_rollouts=1),
+                                    environment=EnvironmentParameters(cap, horizon))
                 self.assertEqual(next(v for (_, a), v in model.q.items() if a == "start"), expected)
                 self.assertEqual(result.history[0].end, end)
 
     def test_external_cap_interrupts_episodes(self):
         mine, rules = tiny_mine()
-        result, _ = run(mine, rules, training=TrainingParameters(3, 1, "external"), rollouts=1)
+        result, _ = run(mine, rules, params=QLearningParams(transitions=3, policy_rollouts=1),
+                        environment=EnvironmentParameters(1, "external"))
         self.assertEqual([e.end for e in result.history], ["episode_cap", "episode_cap", "budget"])
         self.assertEqual(result.policy[0].end, "episode_cap")
 
     def test_seed_reproducibility_and_rollouts_do_not_touch_training(self):
         mine, rules = tiny_mine()
-        left, left_model = run(mine, rules, training=TrainingParameters(201, 12, "finite"), rollouts=3, seed=3)
-        right, right_model = run(mine, rules, training=TrainingParameters(201, 12, "finite"), rollouts=7, seed=3)
+        left, left_model = run(mine, rules, params=QLearningParams(transitions=201, policy_rollouts=3), seed=3)
+        right, right_model = run(mine, rules, params=QLearningParams(transitions=201, policy_rollouts=7), seed=3)
         self.assertEqual(left_model.q, right_model.q)
         self.assertEqual(left_model.rng.getstate(), right_model.rng.getstate())
         self.assertEqual(left.history, right.history)
@@ -91,15 +95,17 @@ class TrainerTests(unittest.TestCase):
     def test_multi_period_capacity_and_discount_are_supported(self):
         mine, rules = tiny_mine()
         problem = ProblemParameters(periods=2, discount_rate=0.1, capacity=3)
-        result, _ = run(mine, rules, problem=problem, training=TrainingParameters(2_000, 12, "external"), rollouts=3)
+        result, _ = run(mine, rules, problem=problem, params=QLearningParams(transitions=2_000, policy_rollouts=3),
+                        environment=EnvironmentParameters(12, "external"))
         self.assertTrue(result.best_observed.evaluation.feasible)
         self.assertTrue(all(len([e for e in r.plan.extractions if e.period == p]) <= 3
                             for r in result.policy for p in (0, 1)))
 
     def test_invalid_parameters(self):
-        for kind, values in ((AgentParameters, {"state": "full"}), (AgentParameters, {"alpha": 0}),
-                             (AgentParameters, {"gamma": 1.1}), (TrainingParameters, {"transitions": 0}),
-                             (TrainingParameters, {"horizon": "implicit"}), (EvaluationParameters, {"policy_rollouts": 0})):
+        for kind, values in ((QLearningParams, {"state": "full"}), (QLearningParams, {"alpha": 0}),
+                             (QLearningParams, {"gamma": 1.1}), (QLearningParams, {"transitions": 0}),
+                             (QLearningParams, {"policy_rollouts": 0}), (EnvironmentParameters, {"max_steps": 0}),
+                             (EnvironmentParameters, {"horizon": "implicit"})):
             with self.subTest(kind=kind.__name__, values=values), self.assertRaises(ValueError):
                 kind(**values)
 

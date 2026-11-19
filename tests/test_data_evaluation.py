@@ -2,7 +2,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from src.config import PROJECT_ROOT, AgentParameters, ProblemParameters
+from configs import PROJECT_ROOT
+from configs.config_settings import ProblemParameters
+from configs.q_learning_settings import QLearningParams
 from src.data.dataset import Block, Mine, file_hash, load_mine, load_solution
 from src.data.precedences import Precedences, order_selection, pit_precedences
 from src.evaluation.benchmark import maximum_closure
@@ -23,7 +25,7 @@ class DataTests(unittest.TestCase):
                 ProblemParameters(**parameters)
         for parameters in invalid_learning:
             with self.subTest(parameters=parameters), self.assertRaises(ValueError):
-                AgentParameters(**parameters)
+                QLearningParams(**parameters)
 
     def test_table_and_traceability(self):
         with tempfile.TemporaryDirectory() as directory:

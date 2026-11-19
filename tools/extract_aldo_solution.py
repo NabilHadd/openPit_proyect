@@ -26,7 +26,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:  # allow `python tools/extract_aldo_solution.py` as well as `python -m`
     sys.path.insert(0, str(ROOT))
 
-from src.config import project_path  # noqa: E402
+from configs import project_path  # noqa: E402
 from src.data.dataset import SOLUTION_COLUMNS, Block, Mine, file_hash, integer  # noqa: E402
 
 BLOCK_SHEET = "105 Bloques"

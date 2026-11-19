@@ -1,5 +1,6 @@
-"""Entry point. Every value lives in the YAML given by --config; the terminal only carries
-the mode, boolean flags and, for evaluate-plan, the plan to evaluate.
+"""Entry point. Every value lives in the YAML given by --config (and the model YAMLs it
+lists); the terminal only carries the mode, boolean flags and, for evaluate-plan, the plan
+to evaluate.
 
     python main.py train --config configs/config.yml [--plot]
     python main.py evaluate-plan --config configs/config.yml [--plan RUTA]
@@ -12,7 +13,9 @@ import math
 from pathlib import Path
 from statistics import mean
 
-from src.config import DEFAULT_CONFIG, RunConfig, load_config, project_path
+from configs import project_path
+from configs.config_settings import DEFAULT_CONFIG, RunConfig, load_config
+from configs.q_learning_settings import QLearningSettings, load_q_learning_settings
 from src.data.dataset import Mine, Solution, load_mine, load_solution
 from src.data.precedences import Precedences, order_selection, pit_precedences
 from src.evaluation.metrics import Extraction, Plan, evaluate_plan
@@ -72,8 +75,17 @@ def plan_report(mine: Mine, solution: Solution, config: RunConfig, precedences: 
 
 
 def base_report(mode: str, config: RunConfig, mine: Mine, precedences: Precedences) -> dict:
-    return {"schema_version": 2, "mode": mode, "config": config.as_dict(), "code": code_provenance(),
+    return {"schema_version": 3, "mode": mode, "config": config.as_dict(), "code": code_provenance(),
             "runtime": runtime_metadata(), "data": mine_metadata(mine), "precedence_rule": precedences.rule}
+
+
+def load_model_settings(config: RunConfig) -> QLearningSettings:
+    """Reads every YAML of models before training, so a broken file fails first.
+    Q-learning is the only model implemented so far."""
+    unsupported = sorted(set(config.models) - {"q_learning"})
+    if unsupported:
+        raise ValueError(f"Modelos sin implementación en models: {unsupported}; por ahora solo existe q_learning")
+    return load_q_learning_settings(config.models["q_learning"])
 
 
 def load_inputs(config: RunConfig) -> tuple[Mine, Precedences]:
@@ -121,14 +133,16 @@ def seed_row(result, directory: Path) -> dict:
 
 
 def run_train(config: RunConfig, *, plot: bool = False) -> Path:
+    settings = load_model_settings(config)
     mine, precedences = load_inputs(config)
     reference_file = solution_path(config)
     directory = create_run_directory(project_path(config.output), "train")
     report = base_report("train", config, mine, precedences)
+    report["model"] = {"name": config.model, "file": str(project_path(config.models[config.model])),
+                       "params": asdict(settings.params)}
     rows, policy_values = [], []
     for seed in config.seeds:
-        result, model = train(mine, precedences, config.problem, config.agent, config.training,
-                              config.evaluation, seed)
+        result, model = train(mine, precedences, config.problem, config.environment, settings.params, seed)
         rows.append(seed_row(result, directory))
         policy_values.append([r.evaluation.npv for r in result.policy])
         write_json(directory / f"seed-{seed}" / "q-table.json", q_table_payload(model))
@@ -149,7 +163,7 @@ def run_train(config: RunConfig, *, plot: bool = False) -> Path:
     summary = {"seeds": len(rows), "best_observed_max": max(best), "best_observed_mean": mean(best),
                "policy_npv_mean": mean(r["policy"]["npv_mean"] for r in rows)}
     if reference is not None and reference["feasible"]:
-        rollouts = config.evaluation.policy_rollouts
+        rollouts = settings.params.policy_rollouts
         summary.update({"reference_npv": reference["npv"],
                         "best_observed_matches": sum(r["best_observed"]["matches_reference"] for r in rows),
                         "policy_matches": sum(r["policy"]["matches_reference"] for r in rows),

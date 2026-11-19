@@ -9,8 +9,10 @@ import unittest
 
 import yaml
 
+from configs import PROJECT_ROOT, Distribution
+from configs.config_settings import EnvironmentParameters, ProblemParameters, TuningParameters, load_config, parse_config
+from configs.q_learning_settings import QLearningParams, load_q_learning_settings, parse_q_learning_settings
 from main import execute, parser
-from src.config import PROJECT_ROOT, ProblemParameters, load_config, parse_config
 from src.data.dataset import load_mine, load_solution
 from src.data.precedences import pit_precedences
 
@@ -38,13 +40,19 @@ def write_plan(path, ids, ordered=False):
 
 
 def write_config(directory, name="config.yml", **values) -> Path:
+    """Common YAML plus the Q-learning YAML it points to, both inside `directory`."""
     data, solution = Path(directory) / "data.csv", Path(directory) / "solution.csv"
+    q_learning = Path(directory) / "q_learning.yml"
+    q_learning.write_text(yaml.safe_dump({"params": {"transitions": 300, "policy_rollouts": 2}}))
     raw = {"data": str(data), "solution": str(solution), "output": str(directory), "seeds": [9],
-           "training": {"transitions": 300, "max_steps": 30}, "evaluation": {"policy_rollouts": 2}}
+           "environment": {"max_steps": 30}, "model": "q_learning", "models": {"q_learning": str(q_learning)}}
     raw.update(values)
     path = Path(directory) / name
     path.write_text(yaml.safe_dump(raw))
     return path
+
+
+MINIMAL = {"data": "x", "model": "q_learning", "models": {"q_learning": "q_learning.yml"}}
 
 
 def run(*arguments):
@@ -55,18 +63,56 @@ def run(*arguments):
 class ConfigTests(unittest.TestCase):
     def test_repository_config_is_valid(self):
         config = load_config("configs/config.yml")
-        self.assertEqual(config.agent.state, "physical")
-        self.assertEqual(config.training.horizon, "external")
+        self.assertEqual(config.environment.horizon, "external")
+        self.assertEqual(config.model, "q_learning")
+        settings = load_q_learning_settings(config.models[config.model])
+        self.assertEqual(settings.params.state, "physical")
+        self.assertTrue(settings.distributions)
+        self.assertGreaterEqual(config.tuning.n_iter, 1)
 
     def test_unknown_keys_and_invalid_values_are_errors(self):
-        for raw in ({"data": "x", "episodes": 5}, {"data": "x", "agent": {"construction_up": True}},
-                    {"seeds": [0]}, {"data": "x", "seeds": 3}, {"data": "x", "seeds": [1, 1]},
-                    {"data": "x", "training": {"horizon": "implicit"}}):
+        for raw in ({**MINIMAL, "episodes": 5}, {**MINIMAL, "agent": {"state": "physical"}},
+                    {**MINIMAL, "training": {"transitions": 10}}, {**MINIMAL, "environment": {"transitions": 10}},
+                    {key: MINIMAL[key] for key in ("model", "models")}, {key: MINIMAL[key] for key in ("data", "models")},
+                    {key: MINIMAL[key] for key in ("data", "model")}, {**MINIMAL, "model": "dqn"},
+                    {**MINIMAL, "models": {"q_learning": None}}, {**MINIMAL, "seeds": 3}, {**MINIMAL, "seeds": [1, 1]},
+                    {**MINIMAL, "environment": {"horizon": "implicit"}}, {**MINIMAL, "tuning": {"seeds": [0]}},
+                    {**MINIMAL, "tuning": {"seeds": [5, 5]}}, {**MINIMAL, "tuning": {"n_iter": 0}},
+                    {**MINIMAL, "tuning": {"search_seed": -1}}, {**MINIMAL, "tuning": {"distributions": {}}}):
             with self.subTest(raw=raw), self.assertRaises(ValueError):
                 parse_config(raw)
-        config = parse_config({"data": "x"})
+        config = parse_config(MINIMAL)
         self.assertIsNone(config.solution)
         self.assertEqual(config.problem, ProblemParameters())
+        self.assertEqual(config.environment, EnvironmentParameters())
+        self.assertEqual(config.tuning, TuningParameters())
+
+    def test_model_file_is_strict_and_checks_every_distribution(self):
+        def tuned(name, spec):
+            return {"tuning": {"distributions": {name: spec}}}
+        uniform = {"distribution": "uniform", "low": 0.1, "high": 0.5}
+        for raw in ({"alpha": 1}, {"params": {"horizon": "finite"}}, {"params": {"alpha": 0}},
+                    {"tuning": {"seeds": [1]}}, {"tuning": {"grid": {"alpha": [0.5]}}},
+                    tuned("lambda", uniform), tuned("alpha", [0.1, 0.5]), tuned("alpha", {"low": 0.1, "high": 0.5}),
+                    tuned("alpha", {**uniform, "distribution": "normal"}), tuned("alpha", {"distribution": "uniform", "low": 0.1}),
+                    tuned("alpha", {**uniform, "values": [0.2]}), tuned("alpha", {**uniform, "low": 0.5}),
+                    tuned("alpha", {**uniform, "low": "1e-2"}), tuned("alpha", {**uniform, "low": 0.0}),
+                    tuned("alpha", {**uniform, "high": 1.5}), tuned("epsilon", {**uniform, "distribution": "loguniform", "low": 0.0}),
+                    tuned("epsilon_schedule", {"distribution": "choice", "values": []}),
+                    tuned("epsilon_schedule", {"distribution": "choice", "values": "linear"}),
+                    tuned("epsilon_schedule", {"distribution": "choice", "values": ["linear", "linar"]}),
+                    tuned("alpha", {"distribution": "choice", "values": ["0.5"]}), tuned("state", uniform),
+                    tuned("transitions", {"distribution": "choice", "values": [100, 200]}),
+                    tuned("policy_rollouts", {"distribution": "uniform", "low": 1, "high": 5})):
+            with self.subTest(raw=raw), self.assertRaises(ValueError):
+                parse_q_learning_settings(raw)
+        self.assertEqual(parse_q_learning_settings({}).params, QLearningParams())
+        settings = parse_q_learning_settings({"params": {"alpha": 0.5}, "tuning": {"distributions": {
+            "alpha": {"distribution": "loguniform", "low": 1.0e-3, "high": 1},
+            "epsilon_schedule": {"distribution": "choice", "values": ["constant", "linear"]}}}})
+        self.assertEqual(settings.params.alpha, 0.5)
+        self.assertEqual(settings.distributions, {"alpha": Distribution("loguniform", low=1.0e-3, high=1),
+                                                  "epsilon_schedule": Distribution("choice", values=("constant", "linear"))})
 
     def test_only_mode_config_and_boolean_flags_on_the_terminal(self):
         with redirect_stderr(io.StringIO()):
@@ -91,7 +137,10 @@ class CLITests(unittest.TestCase):
             report = json.loads((first / "report.json").read_text())
             self.assertEqual(report["data"]["block_count"], 105)
             self.assertEqual(report["precedence_rule"], "pit-9-above")
-            self.assertEqual(report["config"]["training"]["transitions"], 300)
+            self.assertEqual(report["schema_version"], 3)
+            self.assertEqual(report["model"]["name"], "q_learning")
+            self.assertEqual(report["model"]["params"]["transitions"], 300)
+            self.assertEqual(report["config"]["environment"]["max_steps"], 30)
             self.assertFalse(report["reference"]["feasible"])
             self.assertNotIn("reference_npv", report["summary"])
             report = json.loads((second / "report.json").read_text())
@@ -143,6 +192,20 @@ class CLITests(unittest.TestCase):
                 run("train", "--config", str(missing))
             with self.assertRaisesRegex(ValueError, "solution es null"):
                 run("evaluate-plan", "--config", str(write_config(directory, "none.yml", solution=None)))
+
+    def test_model_files_are_read_before_training(self):
+        with tempfile.TemporaryDirectory() as directory:
+            synthetic_inputs(directory)
+            q_learning = str(Path(directory) / "q_learning.yml")
+            missing = write_config(directory, "missing.yml", models={"q_learning": str(Path(directory) / "none.yml")})
+            other = write_config(directory, "other.yml", models={"q_learning": q_learning, "dqn": q_learning})
+            broken = write_config(directory, "broken.yml")
+            Path(q_learning).write_text(yaml.safe_dump({"params": {"epsilon_schedule": "cubic"}}))
+            for config, message in ((missing, "No existe la configuración"), (other, "Modelos sin implementación"),
+                                    (broken, "epsilon_schedule")):
+                with self.subTest(config=config.name), self.assertRaisesRegex(ValueError, message):
+                    run("train", "--config", str(config))
+            self.assertEqual(list(Path(directory).glob("*-train-*")), [])  # nothing was trained
 
     def test_cli_outside_repository_and_controlled_errors(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -1,6 +1,6 @@
 import unittest
 
-from src.config import AgentParameters
+from configs.q_learning_settings import QLearningParams
 from src.envs.mine_env import STOP
 from src.models.exploration import SCHEDULES, epsilon_at
 from src.models.q_learning import QLearning
@@ -31,20 +31,20 @@ class ExplorationTests(unittest.TestCase):
 
     def test_unknown_schedule_and_out_of_range_transition_are_rejected(self):
         with self.assertRaises(ValueError):
-            AgentParameters(epsilon_schedule="cubic")
+            QLearningParams(epsilon_schedule="cubic")
         for args in (("cubic", 0.5, 0, 10), ("linear", 0.5, 11, 10), ("linear", 0.5, -1, 10)):
             with self.subTest(args=args), self.assertRaises(ValueError):
                 epsilon_at(*args)
 
     def test_random_exploration_never_chooses_stop(self):
-        model = QLearning(AgentParameters(), 0)
+        model = QLearning(QLearningParams(), 0)
         state = object()  # Q is empty: every action ties at 0
         actions = ("north", "down", STOP)
         chosen = {model.select_action(state, actions, epsilon=1.0) for _ in range(500)}
         self.assertEqual(chosen, {"north", "down"})
 
     def test_stop_is_still_chosen_when_it_is_the_greedy_action_or_the_only_one(self):
-        model = QLearning(AgentParameters(), 0)
+        model = QLearning(QLearningParams(), 0)
         state = object()
         model.q[state, STOP] = 10.0
         self.assertEqual({model.select_action(state, ("north", STOP), epsilon=0.0) for _ in range(50)}, {STOP})
