@@ -1,5 +1,5 @@
 # Configuración común a todos los modelos. Rutas relativas a la raíz del repositorio.
-#   python main.py train --config configs/config.yml [--plot]
+#   python main.py train --config configs/config.yml
 #   python main.py evaluate-plan --config configs/config.yml [--plan RUTA]
 # Los hiperparámetros de cada modelo viven en su propio YAML (ver models).
 

@@ -25,24 +25,28 @@ cliente (VAN óptimo de referencia: 336.000).
 │   └── processed/             # CSV estándar que lee el pipeline (+ *.example.csv versionados)
 ├── tools/                     # Conversión de archivos de origen a CSV estándar (ver tools/README.md)
 ├── src/
+│   ├── runner.py              # Bucle común de los modos que entrenan: una corrida por semilla y
+│   │                          # comparación con la referencia, sin conocer el modelo
 │   ├── data/
 │   │   ├── dataset.py         # Lectura de bloques y planes; bloques alcanzables
+│   │   ├── instance.py        # MineInstance: mina, precedencias, problema y entorno que recibe cada modelo
 │   │   └── precedences.py     # Regla de precedencia del talud
 │   ├── envs/mine_env.py       # Entorno: estados, acciones, extracción de conos y recompensa
 │   ├── models/
-│   │   ├── base.py            # Interfaz común de los modelos
-│   │   ├── q_learning.py      # Q-learning tabular
+│   │   ├── base.py            # MineEstimator: contrato común (estimador de scikit-learn)
+│   │   ├── registry.py        # MODELS: nombre de cada modelo -> estimador, hiperparámetros y lector de su YAML
+│   │   ├── q_learning.py      # Q-learning tabular: entrenamiento por presupuesto de transiciones y rollouts de la política
 │   │   └── exploration.py     # Curvas de epsilon (exploración)
 │   ├── training/
-│   │   ├── rewards.py         # Recompensa: VAN incremental de lo extraído
-│   │   └── trainer.py         # Entrenamiento por presupuesto de transiciones y evaluación de la política
+│   │   └── rewards.py         # Recompensa: VAN incremental de lo extraído
 │   └── evaluation/
 │       ├── metrics.py         # Verificador independiente de planes (factibilidad y VAN)
 │       ├── reporter.py        # report.json, planes CSV y trazabilidad
 │       ├── plots.py           # Curva de aprendizaje (SVG)
 │       ├── benchmark.py       # Óptimo exacto por máximo cierre (caso de 1 período, usado en tests)
 │       └── tiny_oracle.py     # Mina de 6 bloques con óptimo por enumeración (usado en tests)
-├── tests/                     # Tests automatizados (unittest)
+├── tests/                     # Tests automatizados (unittest): test_estimator_contract.py revisa a todo
+│                              # modelo registrado y test_<modelo>.py su comportamiento propio
 └── artifacts/reports/         # Resultados de cada ejecución (no se versionan)
 ```
 
@@ -107,8 +111,8 @@ Configuración de referencia: `state: physical`, `horizon: external`, `alpha: 1`
 ## Ejecución
 
 ```bash
-# Entrena un agente por semilla y exporta sus planes
-python main.py train --config configs/config.yml [--plot]
+# Entrena el modelo indicado en model, una vez por semilla, y exporta sus resultados
+python main.py train --config configs/config.yml
 
 # Verifica un plan y recalcula su VAN (sin --plan evalúa la solución del YAML)
 python main.py evaluate-plan --config configs/config.yml [--plan RUTA.csv]
@@ -117,13 +121,19 @@ python main.py evaluate-plan --config configs/config.yml [--plan RUTA.csv]
 Cada ejecución crea `artifacts/reports/<fecha>-<modo>-<id>/` con:
 
 - `report.json`: configuración común, modelo y sus hiperparámetros (`model`), versión del
-  código, hash de los datos, resultado por semilla y resumen (incluida la comparación con la
-  solución de referencia, que se lee **después** de entrenar todas las semillas).
-- `seed-<n>/best_observed.csv`: mejor plan observado durante el entrenamiento.
-- `seed-<n>/policy_best.csv`: mejor plan construido con la política aprendida.
-- `seed-<n>/training.json` y `q-table.json`: historial de episodios, rollouts y tabla Q.
-- `seed-<n>/training.svg`: curva de aprendizaje (solo con `--plot`).
+  código y hash de los datos. Por semilla, los campos comunes a todo modelo (`score`: VAN del
+  plan entregado, `blocks`, `seconds`, `artifacts`) y los propios del modelo (`diagnostics`).
+  Al final, el resumen y la comparación con la solución de referencia, que se lee **después**
+  de entrenar y guardar todas las semillas: si el plan entregado la iguala
+  (`matches_reference`) y los conteos propios del modelo (`reference`), sumados en el resumen.
+- `seed-<n>/`: los archivos de cada modelo. En Q-learning:
+  - `best_observed.csv`: mejor plan observado durante el entrenamiento (el plan entregado).
+  - `policy_best.csv`: mejor plan construido con la política aprendida.
+  - `training.json` y `q-table.json`: historial de episodios, rollouts y tabla Q.
+  - `training.svg`: curva de aprendizaje.
 
+En Q-learning, los conteos contra la referencia son `policy_matches` (rollouts de la política
+que la igualan), `policy_rollouts` y `policy_always_matches` (semillas en que todos la igualan).
 
 ## Tests
 

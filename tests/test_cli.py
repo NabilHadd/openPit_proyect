@@ -116,8 +116,8 @@ class ConfigTests(unittest.TestCase):
 
     def test_only_mode_config_and_boolean_flags_on_the_terminal(self):
         with redirect_stderr(io.StringIO()):
-            for arguments in (["train", "--data", "x"], ["train", "--plan", "x"], ["evaluate-plan", "--plot"],
-                              ["benchmark"], ["experiments"]):
+            for arguments in (["train", "--data", "x"], ["train", "--plan", "x"], ["train", "--plot"],
+                              ["evaluate-plan", "--plot"], ["benchmark"], ["experiments"]):
                 with self.subTest(arguments=arguments), self.assertRaises(SystemExit):
                     parser().parse_args(arguments)
 
@@ -131,22 +131,28 @@ class CLITests(unittest.TestCase):
             write_plan(Path(directory) / "solution.csv", SURFACE)
             second = run("train", "--config", str(config))
             third = run("train", "--config", str(write_config(directory, "none.yml", solution=None)))
-            for name in ("training.json", "q-table.json", "best_observed.csv", "policy_best.csv"):
+            names = sorted(p.name for p in (first / "seed-9").iterdir())
+            self.assertEqual(names, ["best_observed.csv", "policy_best.csv", "q-table.json", "training.json", "training.svg"])
+            for name in names:
                 self.assertEqual((first / "seed-9" / name).read_bytes(), (second / "seed-9" / name).read_bytes())
                 self.assertEqual((first / "seed-9" / name).read_bytes(), (third / "seed-9" / name).read_bytes())
             report = json.loads((first / "report.json").read_text())
             self.assertEqual(report["data"]["block_count"], 105)
             self.assertEqual(report["precedence_rule"], "pit-9-above")
-            self.assertEqual(report["schema_version"], 3)
+            self.assertEqual(report["schema_version"], 4)
             self.assertEqual(report["model"]["name"], "q_learning")
             self.assertEqual(report["model"]["params"]["transitions"], 300)
+            self.assertNotIn("random_state", report["model"]["params"])
             self.assertEqual(report["config"]["environment"]["max_steps"], 30)
             self.assertFalse(report["reference"]["feasible"])
             self.assertNotIn("reference_npv", report["summary"])
+            self.assertNotIn("matches_reference", report["seeds"][0])
             report = json.loads((second / "report.json").read_text())
-            self.assertEqual(report["summary"]["reference_npv"], 70)
-            self.assertEqual(report["summary"]["policy_rollouts"], 2)
-            self.assertIn("matches_reference", report["seeds"][0]["best_observed"])
+            summary, row = report["summary"], report["seeds"][0]
+            self.assertEqual(summary["reference_npv"], 70)
+            self.assertEqual(summary["matches_reference"], int(row["matches_reference"]))
+            self.assertEqual(summary["reference"], row["reference"])  # one seed: totals = its counts
+            self.assertEqual(row["reference"]["policy_rollouts"], 2)
             report = json.loads((third / "report.json").read_text())
             self.assertIsNone(report["reference"])
 
@@ -154,15 +160,18 @@ class CLITests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             data, _ = synthetic_inputs(directory)
             write_plan(Path(directory) / "solution.csv", SURFACE)
-            result = run("train", "--config", str(write_config(directory)), "--plot")
+            result = run("train", "--config", str(write_config(directory)))
             mine = load_mine(data)
             row = json.loads((result / "report.json").read_text())["seeds"][0]
-            for key, file in (("best_observed", row["best_observed"]["file"]), ("policy", row["policy"]["best_file"])):
-                with self.subTest(plan=key):
-                    plan = load_solution(result / file, mine)
+            self.assertEqual(row["artifacts"], "seed-9")
+            for name in ("best_observed.csv", "policy_best.csv"):
+                with self.subTest(plan=name):
+                    plan = load_solution(result / row["artifacts"] / name, mine)
                     self.assertTrue(plan.ordered)
-            self.assertTrue((result / "seed-9" / "training.svg").is_file())
-            self.assertEqual(row["training"]["transitions"], 300)
+            delivered = load_solution(result / row["artifacts"] / "best_observed.csv", mine)
+            self.assertEqual(row["blocks"], len(delivered.entries))
+            self.assertEqual(row["score"], row["diagnostics"]["best_observed"]["npv"])
+            self.assertEqual(row["diagnostics"]["training"]["transitions"], 300)
 
     def test_evaluate_plan_with_and_without_order(self):
         with tempfile.TemporaryDirectory() as directory:

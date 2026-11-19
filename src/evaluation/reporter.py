@@ -1,7 +1,6 @@
 """Local JSON provenance and checked internal plans; not the client's export format."""
 
 import csv
-from dataclasses import asdict
 from datetime import datetime, timezone
 from hashlib import sha256
 import json
@@ -68,14 +67,3 @@ def write_plan_csv(path: Path, plan: Plan) -> None:
         writer.writerow(SOLUTION_COLUMNS)
         writer.writerows((order, e.block_id, e.period) for order, e in enumerate(plan.extractions, start=1))
 
-
-def q_table_payload(model) -> dict:
-    def key_payload(key):
-        payload = asdict(key)
-        if "extracted" in payload:
-            payload["extracted"] = sorted(payload["extracted"])
-        return payload
-    return {"model": model.name, "entries": [
-        {"state": key_payload(state), "action": action, "q": value}
-        for (state, action), value in model.q.items()
-    ]}
