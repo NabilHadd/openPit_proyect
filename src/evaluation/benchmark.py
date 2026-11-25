@@ -8,7 +8,7 @@ from collections import deque
 from dataclasses import dataclass
 from fractions import Fraction
 
-from src.config import ProblemParameters
+from configs.config_settings import ProblemParameters
 from src.data.dataset import Mine
 from src.data.precedences import Precedences, order_selection
 from src.evaluation.metrics import Evaluation, Extraction, Plan, evaluate_plan

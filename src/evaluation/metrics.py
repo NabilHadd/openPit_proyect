@@ -3,8 +3,9 @@
 from dataclasses import dataclass
 import math
 
-from src.config import ProblemParameters
+from configs.config_settings import ProblemParameters
 from src.data.dataset import Mine
+from src.data.instance import MineInstance
 from src.data.precedences import Precedences
 from src.training.rewards import discounted_value
 
@@ -87,3 +88,16 @@ def evaluate_plan(mine: Mine, plan: Plan, parameters: ProblemParameters,
     status = "unverified" if precedences is None else "verified"
     feasible = False if errors else (None if precedences is None else True)
     return Evaluation(feasible, raw_value, npv, tuple(errors), status, tuple(usage))
+
+
+def same_value(left: float, right: float) -> bool:
+    """Equality of two VAN computed along different paths (the same sum in another order)."""
+    return math.isclose(left, right, rel_tol=1e-12, abs_tol=1e-6)
+
+
+def checked_evaluation(instance: MineInstance, plan: Plan) -> Evaluation:
+    """Evaluation of a plan a model produced: an infeasible plan is a bug, never a result."""
+    result = evaluate_plan(instance.mine, plan, instance.problem, instance.precedences)
+    if result.feasible is not True:
+        raise RuntimeError(f"El modelo produjo un plan inválido: {result.errors}")
+    return result

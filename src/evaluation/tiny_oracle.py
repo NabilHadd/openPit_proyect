@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from itertools import combinations
 from math import fsum
 
-from src.config import TrainingParameters
+from configs.config_settings import EnvironmentParameters
 from src.data.dataset import Block, Mine
 from src.data.precedences import Precedences
 
@@ -29,7 +29,7 @@ class TinyOracleResult:
     transitions: int
 
 
-def enumerate_tiny(mine: Mine, rules: Precedences, training: TrainingParameters) -> TinyOracleResult:
+def enumerate_tiny(mine: Mine, rules: Precedences, environment: EnvironmentParameters) -> TinyOracleResult:
     """Enumerate closed subsets AND reachable spatial states.
 
     The subset optimum need not be attainable from the forced start or within the
@@ -55,8 +55,8 @@ def enumerate_tiny(mine: Mine, rules: Precedences, training: TrainingParameters)
     dz = -1
     offsets = {"north": (-1, 0, 0), "south": (1, 0, 0), "west": (0, -1, 0),
                "east": (0, 1, 0), "down": (0, 0, dz), "up": (0, 0, -dz)}
-    finite = training.horizon == "finite"
-    initial = frozenset(), None, training.max_steps if finite else 0
+    finite = environment.horizon == "finite"
+    initial = frozenset(), None, environment.max_steps if finite else 0
     queue = deque([(initial, ())])
     seen = {initial}
     best = float("-inf")

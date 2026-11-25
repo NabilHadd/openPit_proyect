@@ -2,7 +2,7 @@ from collections import deque
 from dataclasses import replace
 import unittest
 
-from src.config import ProblemParameters, TrainingParameters
+from configs.config_settings import EnvironmentParameters, ProblemParameters
 from src.data.dataset import Block, Mine
 from src.data.precedences import Precedences
 from src.envs.mine_env import ADVANCE, START, STOP, MineEnv, State
@@ -14,7 +14,7 @@ def layered(problem=ProblemParameters(), max_steps=20, horizon="finite"):
                  Block(3, 0, 0, 1, 15, tonnes=1), Block(4, 0, 1, 3, -2, tonnes=1),
                  Block(5, 5, 5, 3, -1, tonnes=1)))
     rules = Precedences({1: (), 2: (1, 4), 3: (2,), 4: (), 5: ()})
-    return MineEnv(mine, problem, rules, TrainingParameters(1, max_steps, horizon))
+    return MineEnv(mine, problem, rules, EnvironmentParameters(max_steps, horizon))
 
 
 class EnvironmentTests(unittest.TestCase):
@@ -26,7 +26,7 @@ class EnvironmentTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             env.step(START)
         tied = MineEnv(Mine((Block(9, 0, 0, 1, 7), Block(2, 1, 0, 1, 7))),
-                       ProblemParameters(), Precedences({9: (), 2: ()}), TrainingParameters())
+                       ProblemParameters(), Precedences({9: (), 2: ()}), EnvironmentParameters())
         self.assertEqual(tied.start_id, 2)
 
     def test_cones_revisits_and_six_directions_always(self):
@@ -67,7 +67,7 @@ class EnvironmentTests(unittest.TestCase):
     def test_unreachable_blocks_are_never_destinations(self):
         mine = Mine((Block(1, 0, 0, 2, 5), Block(4, 1, 0, 2, -1),
                      Block(2, 0, 0, 1, 50, reachable=False), Block(3, 1, 0, 1, 7)))
-        env = MineEnv(mine, ProblemParameters(), Precedences({1: (), 4: (), 2: (1,), 3: (4,)}), TrainingParameters())
+        env = MineEnv(mine, ProblemParameters(), Precedences({1: (), 4: (), 2: (1,), 3: (4,)}), EnvironmentParameters())
         env.step(START)
         self.assertNotIn("down", env.available_actions())
         self.assertEqual(env.step("south")[1], -1)
@@ -80,7 +80,7 @@ class EnvironmentTests(unittest.TestCase):
         rules = Precedences({1: (), 2: (1, 4), 3: (2,), 4: ()})
         for problem in (ProblemParameters(), ProblemParameters(3, 0.15, 3), ProblemParameters(3, 0.15, 4, "tonnes")):
             def make(actions=()):
-                env = MineEnv(mine, problem, rules, TrainingParameters(1, 8, "finite"))
+                env = MineEnv(mine, problem, rules, EnvironmentParameters(8, "finite"))
                 return env, sum(env.step(a)[1] for a in actions)
             queue, seen, transitions = deque([((), make()[0].state)]), set(), 0
             while queue:

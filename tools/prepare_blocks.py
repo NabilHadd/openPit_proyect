@@ -25,7 +25,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:  # allow `python tools/prepare_blocks.py` as well as `python -m`
     sys.path.insert(0, str(ROOT))
 
-from src.config import project_path  # noqa: E402
+from configs import project_path  # noqa: E402
 from src.data.dataset import BLOCK_COLUMNS, OPTIONAL_BLOCK_COLUMNS, file_hash, load_mine  # noqa: E402
 
 STANDARD_COLUMNS = BLOCK_COLUMNS + OPTIONAL_BLOCK_COLUMNS
