@@ -1,0 +1,27 @@
+# Hiperparámetros de Dyna-Q (src/models/dyna_q.py). El problema, los datos y el entorno están
+# en configs/config.yml; aquí solo va cómo aprende el modelo.
+# Dyna-Q = Q-learning + un modelo APRENDIDO de las transiciones vividas: después de cada paso
+# real hace planning_steps actualizaciones simuladas con pares (estado, acción) ya vistos,
+# sorteados al azar. Nunca consulta el simulador al planificar.
+
+params:                  # mismo presupuesto y exploración que Q-learning, para compararlos
+  state: physical        # obligatorio: con position el modelo aprendido mezclaría estados distintos
+  alpha: 1.0             # tasa de aprendizaje, en (0, 1]
+  gamma: 1.0             # cuanto pesa el valor futuro, en [0, 1]
+  epsilon: 0.5           # azar inicial de la exploración; baja hasta 0 al final del presupuesto
+  epsilon_schedule: linear
+  transitions: 100000    # presupuesto: pasos REALES por semilla (las actualizaciones simuladas no cuentan)
+  policy_rollouts: 20    # planes construidos con la política aprendida
+  planning_steps: 10     # n: actualizaciones simuladas por paso real (0 = Q-learning exacto).
+                         # 10 multiplica por 11 las actualizaciones de Q (1,1 millones por semilla):
+                         # suficiente para propagar valor hacia atrás sin que el tiempo explote.
+
+tuning:                  # modo tuning por búsqueda aleatoria (aún no implementado)
+  distributions:         # parámetros de params a ajustar; los que no aparecen quedan fijos
+    planning_steps: {distribution: randint, low: 0, high: 50}
+    alpha: {distribution: loguniform, low: 0.01, high: 1.0}
+    epsilon: {distribution: uniform, low: 0.1, high: 0.9}
+    epsilon_schedule: {distribution: choice, values: [constant, linear]}
+  # Distribuciones: uniform y loguniform (low, high), randint (enteros, ambos incluidos), choice (values).
+  # Un parámetro entero (planning_steps) solo acepta randint o choice.
+  # transitions y policy_rollouts no se ajustan: presupuesto y evaluación iguales para toda configuración.

@@ -1,9 +1,8 @@
 import unittest
 
-from configs.q_learning_settings import QLearningParams
 from src.envs.mine_env import STOP
 from src.models.exploration import SCHEDULES, epsilon_at
-from src.models.q_learning import QLearningEstimator
+from src.models.q_learning import QLearningEstimator, QLearningParams
 
 
 def untrained() -> QLearningEstimator:

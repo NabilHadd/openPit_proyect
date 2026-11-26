@@ -1,14 +1,17 @@
 """Configuration shared by every model (configs/config.yml).
 
 Everything that defines the task lives here: data, reference solution, output, seeds,
-the mining problem and how MineEnv presents it. How a model learns lives in the model's
-own YAML, listed in `models`.
+the mining problem and how MineEnv presents it, and which models the modes run (train,
+experiments). How a model learns lives in its own YAML, found by convention:
+configs/<key>.yml, next to this file.
 """
 
 from dataclasses import asdict, dataclass, field, fields
 import math
+from pathlib import Path
+import re
 
-from configs import check_keys, integer, read_yaml, section
+from configs import PROJECT_ROOT, check_keys, integer, project_path, read_yaml, section
 
 
 DEFAULT_CONFIG = "configs/config.yml"
@@ -77,35 +80,55 @@ class TuningParameters:
         _check_seeds(self.seeds, "tuning.seeds", allow_empty=True)
 
 
+def _check_key(key, where: str):
+    """A model key is also the name of its module (src/models/<key>.py) and of its YAML."""
+    if not isinstance(key, str) or not key.isidentifier():
+        raise ValueError(f"{where} debe ser la clave de un modelo (nombre de módulo, p. ej. q_learning): {key!r}")
+
+
 @dataclass(frozen=True)
 class RunConfig:
+    """train: the model of the train mode; experiments: the models of the experiments mode.
+    The YAML of model <key> is <key>.yml in the folder of this configuration (configs/).
+    name: optional label added at the end of the output folder names."""
     data: str
-    model: str                # model to run: a key of models
-    models: dict[str, str]    # model name -> path of its YAML
+    train: str | None = None
+    experiments: tuple[str, ...] = ()
+    name: str | None = None
     solution: str | None = None
-    output: str = "artifacts/reports"
+    output: str = "artifacts"
     seeds: tuple[int, ...] = (0,)
     problem: ProblemParameters = field(default_factory=ProblemParameters)
     environment: EnvironmentParameters = field(default_factory=EnvironmentParameters)
     tuning: TuningParameters = field(default_factory=TuningParameters)
+    source: str | None = None  # path of the configuration file it was read from
 
     def __post_init__(self):
         _check_seeds(self.seeds, "seeds")
-        if not isinstance(self.models, dict) or not self.models or not all(
-                isinstance(name, str) and name and isinstance(path, str) and path
-                for name, path in self.models.items()):
-            raise ValueError("models debe asociar cada nombre de modelo a la ruta de su YAML")
-        if not isinstance(self.model, str) or self.model not in self.models:
-            raise ValueError(f"model debe ser una clave de models: {sorted(self.models)}")
+        if self.train is None and not self.experiments:
+            raise ValueError("La configuración debe indicar train (un modelo) o experiments (lista de modelos)")
+        if self.train is not None:
+            _check_key(self.train, "train")
+        for key in self.experiments:
+            _check_key(key, "cada elemento de experiments")
+        if len(set(self.experiments)) != len(self.experiments):
+            raise ValueError("experiments no puede repetir modelos")
+        if self.name is not None and (not isinstance(self.name, str) or not re.fullmatch(r"[A-Za-z0-9_-]+", self.name)):
+            raise ValueError("name solo admite letras, dígitos, _ y - (va en el nombre de la carpeta)")
         shared = sorted(set(self.seeds) & set(self.tuning.seeds))
         if shared:
             raise ValueError(f"tuning.seeds no puede repetir semillas de seeds: {shared}")
+
+    def model_file(self, key: str) -> Path:
+        """By convention, configs/<key>.yml: next to the configuration file."""
+        folder = Path(self.source).parent if self.source is not None else PROJECT_ROOT / "configs"
+        return folder / f"{key}.yml"
 
     def as_dict(self) -> dict:
         return asdict(self)
 
 
-TOP_LEVEL = {"data", "solution", "output", "seeds", "problem", "environment", "model", "models", "tuning"}
+TOP_LEVEL = {"data", "solution", "output", "seeds", "problem", "environment", "train", "experiments", "name", "tuning"}
 
 
 def _seed_list(values, name: str) -> tuple[int, ...]:
@@ -114,20 +137,24 @@ def _seed_list(values, name: str) -> tuple[int, ...]:
     return tuple(values)
 
 
-def parse_config(raw) -> RunConfig:
+def parse_config(raw, source: str | None = None) -> RunConfig:
     check_keys(raw, TOP_LEVEL, "la configuración")
-    for key in ("data", "model", "models"):
-        if not raw.get(key):
-            raise ValueError(f"La configuración debe indicar {key}")
+    if not raw.get("data"):
+        raise ValueError("La configuración debe indicar data")
+    experiments = raw.get("experiments", [])
+    if not isinstance(experiments, list):
+        raise ValueError("experiments debe ser una lista de modelos, por ejemplo [q_learning]")
     tuning = check_keys(raw.get("tuning") or {}, {f.name for f in fields(TuningParameters)}, "tuning")
-    return RunConfig(data=str(raw["data"]), model=raw["model"], models=raw["models"],
+    return RunConfig(data=str(raw["data"]), train=raw.get("train"), experiments=tuple(experiments),
+                     name=raw.get("name"),
                      solution=None if raw.get("solution") is None else str(raw["solution"]),
-                     output=str(raw.get("output", "artifacts/reports")),
+                     output=str(raw.get("output", "artifacts")),
                      seeds=_seed_list(raw.get("seeds", [0]), "seeds"),
                      problem=section(ProblemParameters, raw.get("problem"), "problem"),
                      environment=section(EnvironmentParameters, raw.get("environment"), "environment"),
-                     tuning=TuningParameters(**{**tuning, "seeds": _seed_list(tuning.get("seeds", []), "tuning.seeds")}))
+                     tuning=TuningParameters(**{**tuning, "seeds": _seed_list(tuning.get("seeds", []), "tuning.seeds")}),
+                     source=source)
 
 
 def load_config(path) -> RunConfig:
-    return parse_config(read_yaml(path))
+    return parse_config(read_yaml(path), str(project_path(path)))

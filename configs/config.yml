@@ -1,11 +1,13 @@
 # Configuración común a todos los modelos. Rutas relativas a la raíz del repositorio.
-#   python main.py train --config configs/config.yml
+#   python main.py train --config configs/config.yml          (el modelo de train)
+#   python main.py experiments --config configs/config.yml    (los modelos de experiments)
 #   python main.py evaluate-plan --config configs/config.yml [--plan RUTA]
-# Los hiperparámetros de cada modelo viven en su propio YAML (ver models).
+# Los hiperparámetros de cada modelo viven en configs/<clave>.yml, junto a este archivo.
 
 data: data/processed/data.csv          # CSV estándar de bloques (id,x,y,z,value[,tonnes])
 solution: data/processed/solution.csv  # plan de referencia (order,id,period); null = sin referencia
-output: artifacts/reports              # carpeta de resultados (una subcarpeta por ejecución)
+output: artifacts                      # carpeta de resultados: <output>/train, <output>/experiments, <output>/evaluate-plan
+# name: prueba                         # opcional: se agrega al final del nombre de cada carpeta de resultados
 seeds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]  # una ejecución independiente por semilla
 
 problem:                 # Variables del problema
@@ -19,9 +21,9 @@ environment:             # Cómo MineEnv presenta el problema a los modelos que 
   horizon: external      # external: max_steps solo interrumpe, el agente no ve el reloj
                          # finite: max_steps es regla de la tarea y los pasos restantes son parte del estado
 
-model: q_learning        # modelo que se entrena (una clave de models)
-models:                  # YAML de hiperparámetros de cada modelo
-  q_learning: configs/q_learning.yml
+train: q_learning        # modelo del modo train (su YAML: configs/q_learning.yml)
+experiments: [prioritized_sweeping, dyna_q, beam_search]  # modelos del modo experiments, todos con las
+                           # mismas seeds (un modelo determinista, como beam_search, corre solo con la primera)
 
 tuning:                  # modo tuning por búsqueda aleatoria (aún no implementado); igual para todos los modelos
   n_iter: 20             # configuraciones sorteadas desde las distribuciones del YAML del modelo
