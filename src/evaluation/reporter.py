@@ -1,14 +1,13 @@
 """Local JSON provenance and checked internal plans; not the client's export format."""
 
 import csv
-from datetime import datetime, timezone
+from datetime import datetime
 from hashlib import sha256
 import json
 from pathlib import Path
 import platform
 import subprocess
 import sys
-from uuid import uuid4
 
 from configs import PROJECT_ROOT
 from src.data.dataset import SOLUTION_COLUMNS, Mine
@@ -41,11 +40,28 @@ def runtime_metadata() -> dict:
     return {"python": sys.version, "platform": platform.platform()}
 
 
-def create_run_directory(root: Path, mode: str) -> Path:
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
-    path = root / f"{stamp}-{mode}-{uuid4().hex[:8]}"
-    path.mkdir(parents=True, exist_ok=False)
-    return path
+def create_run_directory(root: Path, label: str, name: str | None = None, now: datetime | None = None) -> Path:
+    """root/<YYYY-MM-DD_HH-MM>_<label>[_<name>] in local time; if it already exists,
+    _2, _3, ... is appended (never a random hash)."""
+    stamp = (now or datetime.now()).strftime("%Y-%m-%d_%H-%M")
+    base = f"{stamp}_{label}" + (f"_{name}" if name else "")
+    root.mkdir(parents=True, exist_ok=True)
+    for index in range(1, 10_000):
+        path = root / (base if index == 1 else f"{base}_{index}")
+        try:
+            path.mkdir()
+            return path
+        except FileExistsError:
+            continue
+    raise OSError(f"Demasiadas carpetas con el nombre {base} en {root}")
+
+
+def write_rows_csv(path: Path, columns: tuple[str, ...], rows: list[dict]) -> None:
+    """Rows -> CSV with the given columns; None is written as an empty cell."""
+    with Path(path).open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(columns)
+        writer.writerows(["" if row.get(c) is None else row.get(c) for c in columns] for row in rows)
 
 
 def preparation_metadata(data_path: str) -> dict | None:

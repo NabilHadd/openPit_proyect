@@ -25,4 +25,7 @@ data/processed/*
 
 # Artefactos generados (se conserva la estructura con .gitkeep)
 artifacts/reports/*
+artifacts/train/*
+artifacts/experiments/*
+artifacts/evaluate-plan/*
 !artifacts/**/.gitkeep

@@ -1,11 +1,12 @@
-"""Configuration package: one YAML plus one settings module per concern.
+"""Configuration package: the common YAML plus one YAML per model.
 
-    config.yml      + config_settings.py      shared by every model: data, problem, environment, seeds
-    q_learning.yml  + q_learning_settings.py  Q-learning hyperparameters and its tuning grid
+    config.yml    + config_settings.py  shared by every model: data, problem, environment, seeds
+    <model>.yml   + model_settings.py   hyperparameters of one model and its tuning distributions;
+                                        the params dataclass lives in src/models/<model>.py
 
 Paths are relative to the repository, never to the caller. Every reader is strict: an
-unknown key is an error, so a typo is never silently ignored. This module and
-config_settings.py import nothing from src/.
+unknown key is an error, so a typo is never silently ignored. Nothing in configs/
+imports from src/.
 """
 
 from dataclasses import dataclass, fields
@@ -56,7 +57,9 @@ def section(kind, values, where: str):
     return kind(**check_keys(values, {f.name for f in fields(kind)}, where))
 
 
-DISTRIBUTIONS = {"uniform": ("low", "high"), "loguniform": ("low", "high"), "choice": ("values",)}
+DISTRIBUTIONS = {"uniform": ("low", "high"), "loguniform": ("low", "high"), "randint": ("low", "high"),
+                 "choice": ("values",)}
+CONTINUOUS = ("uniform", "loguniform")  # never for an integer hyperparameter
 
 
 def _real(value) -> bool:
@@ -70,6 +73,8 @@ class Distribution:
     uniform: any value in [low, high], all equally likely.
     loguniform: uniform over the logarithm in [low, high] (low > 0): every order of
         magnitude is equally likely, for parameters whose scale matters more than the value.
+    randint: any integer in [low, high], both included, all equally likely (integer
+        hyperparameters, e.g. planning steps or beam width).
     choice: one of `values`, all equally likely.
 
     Only data: the tuning mode turns it into a sampler, and it can go into report.json.
@@ -86,7 +91,10 @@ class Distribution:
             if not self.values or self.low is not None or self.high is not None:
                 raise ValueError("choice requiere solo values, una lista no vacía")
             return
-        if self.values or not _real(self.low) or not _real(self.high):
+        if self.distribution == "randint":
+            if self.values or not all(isinstance(v, int) and not isinstance(v, bool) for v in (self.low, self.high)):
+                raise ValueError("randint requiere low y high enteros")
+        elif self.values or not _real(self.low) or not _real(self.high):
             raise ValueError(f"{self.distribution} requiere low y high numéricos y finitos")
         if not self.low < self.high:
             raise ValueError("low debe ser menor que high")

@@ -4,11 +4,10 @@ from dataclasses import replace
 import unittest
 
 from configs.config_settings import EnvironmentParameters, ProblemParameters
-from configs.q_learning_settings import QLearningParams
 from src.data.instance import MineInstance
 from src.envs.mine_env import MineEnv
 from src.evaluation.tiny_oracle import enumerate_tiny, tiny_mine
-from src.models.q_learning import PositionKey, QLearningEstimator
+from src.models.q_learning import PositionKey, QLearningEstimator, QLearningParams
 
 
 def fit(mine, rules, *, estimator=QLearningEstimator, environment=EnvironmentParameters(12, "finite"),
@@ -117,6 +116,32 @@ class QLearningTests(unittest.TestCase):
                          {"policy_matches": 20, "policy_rollouts": 20, "policy_always_matches": 1})
         self.assertEqual(model.compare_reference(optimum + 1),
                          {"policy_matches": 0, "policy_rollouts": 20, "policy_always_matches": 0})
+
+    def test_observe_replaces_the_direct_update_and_counters_follow(self):
+        """observe is the hook of TabularQ: overriding it decides whether the real
+        transition updates Q at all (prioritized sweeping queues it instead)."""
+        mine, rules = tiny_mine()
+        model = fit(mine, rules, transitions=300, policy_rollouts=1)
+        self.assertEqual(model.counters_, {"transitions": 300, "simulator_calls": 300, "updates": 300})
+        self.assertEqual(model.trace_[-1][1], model.best_observed_.evaluation.npv)
+
+        class Silent(QLearningEstimator):
+            def observe(self, *transition):
+                self.seen = getattr(self, "seen", 0) + 1
+
+        silent = fit(mine, rules, estimator=Silent, transitions=300, policy_rollouts=1)
+        self.assertEqual((silent.q_, silent.seen, silent.counters_["updates"]), ({}, 300, 0))
+
+    def test_td_error_does_not_change_q(self):
+        mine, rules = tiny_mine()
+        model = QLearningEstimator(alpha=0.5)
+        model._reset_learning()
+        env = MineEnv(mine, ProblemParameters(), rules, EnvironmentParameters(12, "finite"))
+        state = env.reset()
+        following, reward, terminal = env.step("start")
+        error = model.td_error(state, "start", reward, following, env.available_actions(), terminal)
+        self.assertEqual((error, model.q_), (reward, {}))
+        self.assertEqual(model.update(state, "start", reward, following, env.available_actions(), terminal), reward / 2)
 
     def test_invalid_parameters(self):
         for kind, values in ((QLearningParams, {"state": "full"}), (QLearningParams, {"alpha": 0}),

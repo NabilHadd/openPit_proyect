@@ -18,7 +18,9 @@ tuning:                  # modo tuning por búsqueda aleatoria (aún no implemen
   # Distribuciones disponibles:
   #   uniform:    {distribution: uniform, low: A, high: B}     cualquier valor en [A, B], todos con la misma probabilidad
   #   loguniform: {distribution: loguniform, low: A, high: B}  uniforme en escala logarítmica (A > 0): cada orden de magnitud pesa lo mismo
+  #   randint:    {distribution: randint, low: A, high: B}     entero en [A, B], ambos incluidos (solo parámetros enteros)
   #   choice:     {distribution: choice, values: [...]}        uno de los valores, todos con la misma probabilidad
+  # Un parámetro entero no acepta uniform ni loguniform.
   # En notación científica escribe 1.0e-3, no 1e-3: YAML lee 1e-3 como texto.
   # transitions y policy_rollouts no se ajustan: son el presupuesto y la evaluación, iguales para toda configuración.
 

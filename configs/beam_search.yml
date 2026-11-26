@@ -1,0 +1,20 @@
+# Hiperparámetros de Beam Search (src/models/beam_search.py): búsqueda directa, sin aprendizaje.
+# Cada nivel extiende los planes parciales extrayendo el cono completo de un bloque (o
+# avanzando de período) y conserva los `width` mejores según la heurística. Entrega el mejor
+# plan visto en cualquier nivel. Es determinista: experiments la corre con una sola semilla.
+
+params:
+  width: 10              # B: planes conservados por nivel (1 = búsqueda voraz)
+  heuristic: npv         # cómo se ordenan los planes parciales:
+                         #   npv: VAN acumulado del plan parcial (el estéril de un cono ya está descontado
+                         #        al extraerlo entero, así que no castiga abrir mineral profundo)
+                         #   optimistic: VAN acumulado + valor positivo que queda en el suelo (cota superior;
+                         #        prefiere los planes que sacaron menos estéril). Más lenta.
+  max_simulator_calls: 2000000  # tope de seguridad de llamadas al simulador; con 105 bloques y width 10
+                                # la búsqueda completa usa muchas menos
+
+tuning:                  # modo tuning por búsqueda aleatoria (aún no implementado)
+  distributions:
+    width: {distribution: randint, low: 1, high: 100}
+    heuristic: {distribution: choice, values: [npv, optimistic]}
+  # max_simulator_calls no se ajusta: es el tope del presupuesto, igual para toda configuración.

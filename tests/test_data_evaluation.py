@@ -4,11 +4,11 @@ from pathlib import Path
 
 from configs import PROJECT_ROOT
 from configs.config_settings import ProblemParameters
-from configs.q_learning_settings import QLearningParams
 from src.data.dataset import Block, Mine, file_hash, load_mine, load_solution
 from src.data.precedences import Precedences, order_selection, pit_precedences
 from src.evaluation.benchmark import maximum_closure
 from src.evaluation.metrics import Extraction, Plan, evaluate_plan
+from src.models.q_learning import QLearningParams
 
 
 def small_mine():

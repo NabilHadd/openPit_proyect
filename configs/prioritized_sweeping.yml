@@ -1,0 +1,28 @@
+# Hiperparámetros de Prioritized Sweeping (src/models/prioritized_sweeping.py). El problema,
+# los datos y el entorno están en configs/config.yml.
+# Como Dyna-Q aprende un modelo de las transiciones vividas, pero en vez de sortear pares
+# los ordena por prioridad |error TD|: actualiza primero lo que más cambiaría y propaga el
+# cambio hacia los pares que llevan a ese estado (sus predecesores).
+
+params:                  # mismo presupuesto y exploración que Q-learning, para compararlos
+  state: physical        # obligatorio: con position el modelo aprendido mezclaría estados distintos
+  alpha: 1.0
+  gamma: 1.0
+  epsilon: 0.5
+  epsilon_schedule: linear
+  transitions: 100000    # presupuesto: pasos REALES por semilla
+  policy_rollouts: 20
+  planning_steps: 10     # n: máximo de actualizaciones desde la cola por paso real (0 = Q-learning exacto).
+                         # El mismo valor que Dyna-Q, para comparar ambos con igual cómputo máximo.
+  theta: 0.001           # prioridad mínima para entrar a la cola, en unidades de VAN. Solo filtra
+                         # ruido numérico: los valores de los bloques son de otro orden de magnitud,
+                         # así que todo cambio real de Q entra a la cola. Escribe 0.001, no 1e-3.
+
+tuning:                  # modo tuning por búsqueda aleatoria (aún no implementado)
+  distributions:
+    planning_steps: {distribution: randint, low: 0, high: 50}
+    theta: {distribution: choice, values: [0.0, 0.001, 1.0, 100.0]}
+    alpha: {distribution: loguniform, low: 0.01, high: 1.0}
+    epsilon: {distribution: uniform, low: 0.1, high: 0.9}
+  # Distribuciones: uniform y loguniform (low, high), randint (enteros, ambos incluidos), choice (values).
+  # transitions y policy_rollouts no se ajustan.

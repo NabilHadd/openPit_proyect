@@ -6,7 +6,7 @@ from configs.config_settings import EnvironmentParameters, ProblemParameters
 from src.data.dataset import Block, Mine
 from src.data.precedences import Precedences
 from src.envs.mine_env import ADVANCE, START, STOP, MineEnv, State
-from src.evaluation.metrics import evaluate_plan
+from src.evaluation.metrics import Extraction, Plan, evaluate_plan
 
 
 def layered(problem=ProblemParameters(), max_steps=20, horizon="finite"):
@@ -101,6 +101,121 @@ class EnvironmentTests(unittest.TestCase):
                         seen.add(following)
                         queue.append((prefix + (action,), following))
             self.assertGreater(transitions, 20)
+
+    def test_pure_transition_matches_the_live_episode_and_changes_nothing(self):
+        """BFS over every reachable state with the pure simulator; each state is replayed
+        on a live environment, whose step must give the same result."""
+        mine = Mine((Block(1, 0, 0, 3, 5, tonnes=2), Block(2, 0, 0, 2, -4, tonnes=3),
+                     Block(3, 0, 0, 1, 15, tonnes=1), Block(4, 0, 1, 3, -2, tonnes=1)))
+        rules = Precedences({1: (), 2: (1, 4), 3: (2,), 4: ()})
+        for problem in (ProblemParameters(), ProblemParameters(3, 0.15, 3), ProblemParameters(3, 0.15, 4, "tonnes")):
+            for horizon in ("finite", "external"):
+                simulator = MineEnv(mine, problem, rules, EnvironmentParameters(6, horizon))
+                start = simulator.initial_state()
+                self.assertEqual(start, simulator.reset())
+                queue, seen, checked = deque([((), start)]), {start}, 0
+                while queue:
+                    prefix, state = queue.popleft()
+                    live = MineEnv(mine, problem, rules, EnvironmentParameters(6, horizon))
+                    for action in prefix:
+                        live.step(action)
+                    self.assertEqual(live.state, state)
+                    self.assertEqual(simulator.actions(state), live.available_actions())
+                    for action in simulator.actions(state):
+                        before = simulator.state, simulator.plan, simulator.calls
+                        result = simulator.transition(state, action)
+                        self.assertEqual((simulator.state, simulator.plan, simulator.calls),
+                                         (before[0], before[1], before[2] + 1))  # only the counter moves
+                        replay = MineEnv(mine, problem, rules, EnvironmentParameters(6, horizon))
+                        for previous in prefix:
+                            replay.step(previous)
+                        extractions = replay.plan.extractions
+                        self.assertEqual(replay.step(action), (result.state, result.reward, result.terminal))
+                        self.assertEqual(replay.termination_reason, result.reason)
+                        self.assertEqual(replay.plan.extractions[len(extractions):],
+                                         tuple(Extraction(i, result.state.period) for i in result.extracted))
+                        checked += 1
+                        if not result.terminal and result.state not in seen:
+                            seen.add(result.state)
+                            queue.append((prefix + (action,), result.state))
+                self.assertGreater(checked, 10)
+
+    def test_extracting_a_cone_equals_the_cursor_move_that_extracts_it(self):
+        """On every reachable cursor state, extract(state, d) gives what the move to d gives
+        (blocks, reward, capacity, period, end), except that the step clock does not run."""
+        mine = Mine((Block(1, 0, 0, 3, 5, tonnes=2), Block(2, 0, 0, 2, -4, tonnes=3),
+                     Block(3, 0, 0, 1, 15, tonnes=1), Block(4, 0, 1, 3, -2, tonnes=1)))
+        rules = Precedences({1: (), 2: (1, 4), 3: (2,), 4: ()})
+        compared = 0
+        for problem in (ProblemParameters(), ProblemParameters(3, 0.15, 3), ProblemParameters(3, 0.15, 4, "tonnes")):
+            for horizon in ("finite", "external"):
+                env = MineEnv(mine, problem, rules, EnvironmentParameters(6, horizon))
+                queue, seen = deque([env.initial_state()]), set()
+                while queue:
+                    state = queue.popleft()
+                    for action in env.actions(state):
+                        moved = env.transition(state, action)
+                        destination = moved.state.position if action not in (ADVANCE, STOP) else None
+                        if destination is not None and destination not in state.extracted:
+                            self.assertIn(destination, env.cone_actions(state))
+                            cone = env.extract(state, destination)
+                            self.assertEqual((cone.extracted, cone.reward, cone.state.used, cone.state.period,
+                                              cone.state.extracted, cone.state.position),
+                                             (moved.extracted, moved.reward, moved.state.used, moved.state.period,
+                                              moved.state.extracted, moved.state.position))
+                            self.assertEqual(cone.state.steps_left, state.steps_left)
+                            self.assertEqual(cone.reason, None if moved.reason == "step_limit" else moved.reason)
+                            compared += 1
+                        if not moved.terminal and moved.state not in seen:
+                            seen.add(moved.state)
+                            queue.append(moved.state)
+        self.assertGreater(compared, 20)
+
+    def test_cone_view_builds_feasible_plans_whose_rewards_are_their_npv(self):
+        """Every sequence of cone actions (exhaustive on a small mine) gives a feasible plan
+        and the sum of rewards is its verified VAN; calls counts each one."""
+        mine = Mine((Block(1, 0, 0, 3, 5, tonnes=2), Block(2, 0, 0, 2, -4, tonnes=3),
+                     Block(3, 0, 0, 1, 15, tonnes=1), Block(4, 0, 1, 3, -2, tonnes=1),
+                     Block(5, 5, 5, 3, -1, tonnes=1)))
+        rules = Precedences({1: (), 2: (1, 4), 3: (2,), 4: (), 5: ()})
+        for problem in (ProblemParameters(), ProblemParameters(2, 0.1, 2), ProblemParameters(3, 0.15, 4, "tonnes")):
+            env = MineEnv(mine, problem, rules, EnvironmentParameters(3, "finite"))
+            stack, plans, keys = [(env.initial_state(), (), 0.0)], 0, set()
+            while stack:
+                state, plan, total = stack.pop()
+                keys.add(env.search_key(state))
+                for action in env.cone_actions(state):
+                    calls = env.calls
+                    result = env.cone_step(state, action)
+                    self.assertEqual(env.calls, calls + 1)
+                    extended = plan + tuple(Extraction(i, result.state.period) for i in result.extracted)
+                    evaluation = evaluate_plan(mine, Plan(extended), problem, rules)
+                    self.assertTrue(evaluation.feasible, evaluation.errors)
+                    self.assertAlmostEqual(total + result.reward, evaluation.npv)
+                    if result.terminal:
+                        plans += 1
+                        self.assertIn(result.reason, (STOP, "all_extracted"))  # never step_limit
+                    else:
+                        stack.append((result.state, extended, total + result.reward))
+            self.assertGreater(plans, 10)
+            self.assertTrue(all(len(key) == 3 for key in keys))
+
+    def test_cone_view_rejects_what_it_does_not_offer(self):
+        env = layered(ProblemParameters(periods=2, capacity=4, capacity_unit="tonnes"))
+        state = env.initial_state()
+        self.assertEqual(env.cone_actions(state), (1, 4, 5, ADVANCE, STOP))  # cones of 2 (6 t) and 3 (7 t) exceed 4 t
+        for block in (2, 3, 99):
+            with self.subTest(block=block), self.assertRaises(ValueError):
+                env.extract(state, block)
+        first = env.extract(state, 1).state
+        with self.assertRaises(ValueError):
+            env.extract(first, 1)  # already extracted
+        done = env.cone_step(first, STOP).state
+        self.assertEqual(env.cone_actions(done), ())
+        with self.assertRaises(ValueError):
+            env.cone_step(done, ADVANCE)
+        moved = replace(first, position=4)
+        self.assertEqual(env.search_key(first), env.search_key(moved))  # the cursor is not part of the key
 
     def test_state_has_no_phase(self):
         self.assertNotIn("phase", State.__dataclass_fields__)
