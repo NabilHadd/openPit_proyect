@@ -93,14 +93,25 @@ El pipeline solo lee dos CSV estándar:
 - **Plan o solución** (`data/processed/solution.csv`): `order,id,period`. `order` puede ir
   vacío si la solución es solo un conjunto de bloques.
 
-Los archivos de origen se convierten con los scripts de `tools/`. Por ejemplo, para el
-Excel del cliente:
+Los archivos de origen se convierten con los scripts de `tools/`. Por ejemplo, para los
+Excel del cliente (caso de 105 bloques y 1 período, y caso de 495 bloques y 2 períodos):
 
 ```bash
 python -m tools.prepare_blocks data/raw/data.xlsx --surface z-max --sheet "105 Bloques" \
     --map ID=id X=x Y=y Z=z Valor=value
-python -m tools.extract_aldo_solution data/raw/data.xlsx
+python -m tools.extract_solution data/raw/data.xlsx
+
+python -m tools.prepare_blocks data/raw/Bloques495_2p.xlsx --surface z-max --sheet "495 Bloques" \
+    --map ID=id X=x Y=y Z=z Valor=value
+python -m tools.extract_solution data/raw/Bloques495_2p.xlsx
 ```
+
+`extract_solution` lee la solución pintada en la hoja `Resultado`, sea cual sea el tamaño de
+la grilla, y asigna a cada bloque el período de su color según la leyenda (Período 1 del
+Excel = `period` 0). No fija las variables del problema: `periods`, `capacity` y
+`discount_rate` se escriben a mano en `configs/config.yml`. Como ayuda, el `solution.meta.json`
+guarda los bloques por período y los valores que el Excel informa junto a la solución
+(valor máximo y capacidad), para compararlos con `evaluate-plan`.
 
 Detalle de formatos y validaciones: [`tools/README.md`](tools/README.md). Hay ejemplos
 versionados en `data/processed/*.example.csv`.

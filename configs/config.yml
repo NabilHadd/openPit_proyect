@@ -11,9 +11,9 @@ output: artifacts                      # carpeta de resultados: <output>/train, 
 seeds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]  # una ejecución independiente por semilla
 
 problem:                 # Variables del problema
-  periods: 1
-  discount_rate: 0.0     # tasa de descuento económica del VAN
-  capacity: null         # capacidad máxima por período; null = sin límite
+  periods: 2
+  discount_rate: 0.08     # tasa de descuento económica del VAN
+  capacity: 108         # capacidad máxima por período; null = sin límite
   capacity_unit: blocks  # blocks | tonnes
 
 environment:             # Cómo MineEnv presenta el problema a los modelos que lo recorren
