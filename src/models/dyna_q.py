@@ -44,7 +44,8 @@ class DynaQEstimator(TabularQ):
     name = "spatial-cone-dyna-q"
 
     def __init__(self, state="physical", alpha=1.0, gamma=1.0, epsilon=0.3, epsilon_schedule="constant",
-                 transitions=100_000, policy_rollouts=20, planning_steps=10, random_state=0):
+                 transitions=100_000, policy_rollouts=20, planning_steps=10, initial_q="zero",
+                 random_state=0):
         self.state = state
         self.alpha = alpha
         self.gamma = gamma
@@ -52,6 +53,7 @@ class DynaQEstimator(TabularQ):
         self.epsilon_schedule = epsilon_schedule
         self.transitions = transitions
         self.policy_rollouts = policy_rollouts
+        self.initial_q = initial_q
         self.planning_steps = planning_steps
         self.random_state = random_state
 

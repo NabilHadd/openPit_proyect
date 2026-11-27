@@ -254,11 +254,11 @@ class CLITests(unittest.TestCase):
             alone.mkdir()
             missing = write_config(directory, "missing.yml")
             (alone / "missing.yml").write_text(missing.read_text())  # same config, no q_learning.yml next to it
-            other = write_config(directory, "other.yml", train="dqn")
+            other = write_config(directory, "other.yml", train="ppo")
             broken = write_config(directory, "broken.yml")
             Path(directory, "q_learning.yml").write_text(yaml.safe_dump({"params": {"epsilon_schedule": "cubic"}}))
             for config, message in ((alone / "missing.yml", "No existe el YAML del modelo q_learning"),
-                                    (other, "Modelo sin implementación: dqn"), (broken, "epsilon_schedule")):
+                                    (other, "Modelo sin implementación: ppo"), (broken, "epsilon_schedule")):
                 with self.subTest(config=config.name), self.assertRaisesRegex(ValueError, message):
                     run("train", "--config", str(config))
             self.assertEqual(runs(directory, "train"), [])  # nothing was trained

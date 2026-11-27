@@ -1,0 +1,30 @@
+# Hiperparámetros de DQN (src/models/dqn.py). El problema, los datos y el entorno están en
+# configs/config.yml; aquí solo va cómo aprende el modelo.
+# DQN = Q-learning con una red neuronal pequeña en vez de la tabla. La red recibe atributos
+# del cono de cada acción (valor, cambio del potencial de estéril repartido, mineral, tamaño,
+# profundidad, capacidad, período...), así que lo que aprende de un bloque sirve para los
+# bloques parecidos. Las acciones son conos completos (sin cursor): una transición extrae un
+# cono, así que sus transiciones no se comparan con las de los modelos tabulares.
+
+params:
+  gamma: 1.0             # cuanto pesa el valor futuro, en [0, 1]
+  epsilon: 0.3           # azar de la exploración (constante, o inicial si el schedule es linear)
+  epsilon_schedule: constant
+  transitions: 20000     # presupuesto: acciones de cono por semilla
+  policy_rollouts: 20    # planes construidos con la política aprendida
+  hidden_units: 32       # neuronas por capa oculta (ReLU)
+  hidden_layers: 2       # capas ocultas
+  learning_rate: 0.001   # tasa de aprendizaje de Adam
+  batch_size: 32         # transiciones por actualización de la red
+  replay_size: 10000     # transiciones que guarda la memoria de repetición (se descarta la más antigua)
+  warmup: 1000           # transiciones iniciales al azar, antes de la primera actualización
+  train_every: 1         # una actualización de la red cada train_every transiciones
+  target_update: 500     # transiciones entre copias de la red objetivo
+
+tuning:                  # modo tuning por búsqueda aleatoria (aún no implementado)
+  distributions:
+    learning_rate: {distribution: loguniform, low: 0.0001, high: 0.01}
+    hidden_units: {distribution: choice, values: [16, 32, 64]}
+    epsilon: {distribution: uniform, low: 0.1, high: 0.9}
+    target_update: {distribution: choice, values: [100, 500, 2000]}
+  # transitions y policy_rollouts no se ajustan: presupuesto y evaluación iguales para toda configuración.

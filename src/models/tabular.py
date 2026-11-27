@@ -52,6 +52,9 @@ from src.evaluation.plots import plot_history
 from src.evaluation.reporter import write_json, write_plan_csv
 from src.models.base import MineEstimator
 from src.models.exploration import SCHEDULES, epsilon_at
+from src.training.potential import SharedWastePotential
+
+INITIAL_Q = ("zero", "shared_waste")
 
 
 @dataclass(frozen=True)
@@ -61,6 +64,9 @@ class TabularParams:
     state: what the Q table remembers of a state (physical: position + extracted blocks;
     position: only the position). transitions: training budget per seed (real steps).
     policy_rollouts: plans built with the learned policy after training.
+    initial_q: value of a pair (state, action) never updated. zero: 0. shared_waste: the
+    shared-waste potential of the state (src/training/potential.py), equivalent to
+    potential-based reward shaping; STOP always starts at 0, its true value.
     """
     state: str = "physical"
     alpha: float = 1.0
@@ -69,6 +75,7 @@ class TabularParams:
     epsilon_schedule: str = "constant"  # shape of the decrease, see src/models/exploration.py
     transitions: int = 100_000
     policy_rollouts: int = 20
+    initial_q: str = "zero"
 
     FIXED: ClassVar[tuple[str, ...]] = ("transitions", "policy_rollouts")  # budget and evaluation
     SMOKE: ClassVar[dict] = {"transitions": 500, "policy_rollouts": 2}
@@ -76,6 +83,8 @@ class TabularParams:
     def __post_init__(self):
         if self.state not in {"physical", "position"}:
             raise ValueError("state debe ser physical o position")
+        if self.initial_q not in INITIAL_Q:
+            raise ValueError(f"initial_q debe ser uno de {list(INITIAL_Q)}")
         if self.epsilon_schedule not in SCHEDULES:
             raise ValueError(f"epsilon_schedule debe ser uno de {sorted(SCHEDULES)}")
         if not 0 < self.alpha <= 1:
@@ -135,6 +144,8 @@ class TabularQ(MineEstimator):
         self._check_params()
         env = MineEnv(instance.mine, instance.problem, instance.precedences, instance.environment)
         self._reset_learning()
+        if self.initial_q == "shared_waste":
+            self._potential = SharedWastePotential(env.blocks, env.cones, instance.problem.discount_rate)
         self._start_trace()
         visited, pairs = set(), Counter()
         history = []
@@ -263,6 +274,7 @@ class TabularQ(MineEstimator):
         self.rng_ = random.Random(self.random_state)
         self.q_: dict[tuple[Hashable, str], float] = {}
         self.n_updates_ = 0
+        self._potential = None  # set by fit when initial_q is shared_waste
 
     def state_key(self, state: State) -> Hashable:
         if self.state == "position":
@@ -270,7 +282,13 @@ class TabularQ(MineEstimator):
         return state
 
     def value(self, state: State, action: str) -> float:
-        return self.q_.get((self.state_key(state), action), 0.0)
+        """Q(state, action); a pair never updated has its initial value (initial_q)."""
+        q = self.q_.get((self.state_key(state), action))
+        if q is not None:
+            return q
+        if self._potential is None or action == STOP:
+            return 0.0
+        return self._potential(state)
 
     def best_actions(self, state: State, actions: tuple[str, ...]) -> tuple[str, ...]:
         """Every action tied at the maximum Q value."""

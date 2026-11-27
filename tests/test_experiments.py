@@ -85,11 +85,12 @@ class ExperimentsTests(unittest.TestCase):
             self.assertTrue(rows["exploding_test"]["error"].startswith("RuntimeError: falla a propósito"))
             self.assertIn("transitions=300", rows["q_learning"]["params"])
 
-    def test_the_three_planned_models_run_side_by_side(self):
+    def test_the_planned_models_run_side_by_side(self):
         """The models of configs/config.yml (experiments) with cheap YAMLs, on synthetic data."""
         cheap = {"dyna_q": {"params": {"transitions": 300, "policy_rollouts": 2, "planning_steps": 3}},
                  "prioritized_sweeping": {"params": {"transitions": 300, "policy_rollouts": 2, "planning_steps": 3}},
-                 "beam_search": {"params": {"width": 3}}}
+                 "dqn": {"params": {"transitions": 300, "policy_rollouts": 2, "warmup": 50, "replay_size": 300,
+                                    "target_update": 100}}}
         with tempfile.TemporaryDirectory() as directory:
             experiments_config(directory, [])  # data and reference
             for key, values in cheap.items():
@@ -98,12 +99,12 @@ class ExperimentsTests(unittest.TestCase):
             result = run("experiments", "--config", str(config))
             models = {e["model"]: e for e in json.loads((result / "summary.json").read_text())["models"]}
             self.assertEqual({k: e["status"] for k, e in models.items()}, dict.fromkeys(cheap, "ok"))
-            self.assertEqual((models["beam_search"]["seeds"], models["beam_search"]["cost_unit"]), ([9], "simulator_calls"))
+            self.assertEqual((models["dqn"]["seeds"], models["dqn"]["cost_unit"]), ([9, 10], "transitions"))
             self.assertEqual(models["dyna_q"]["seeds"], [9, 10])
             row = json.loads((result / "dyna_q" / "report.json").read_text())["seeds"][0]
             self.assertEqual(row["cost"]["spent"]["planning_updates"], 900)
-            self.assertTrue((result / "beam_search" / "seed-9" / "plan.csv").is_file())
-            self.assertTrue((result / "beam_search" / "seed-9" / "search.json").is_file())
+            self.assertTrue((result / "dqn" / "seed-9" / "best_observed.csv").is_file())
+            self.assertTrue((result / "dqn" / "seed-9" / "training.json").is_file())
 
     def test_every_model_yaml_is_validated_before_anything_is_trained(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -114,8 +115,8 @@ class ExperimentsTests(unittest.TestCase):
             Path(directory, "fixed_test.yml").unlink()
             with self.assertRaisesRegex(ValueError, "No existe el YAML del modelo fixed_test"):
                 run("experiments", "--config", str(config))
-            unknown = write_config(directory, "unknown.yml", experiments=["q_learning", "dqn"])
-            with self.assertRaisesRegex(ValueError, "Modelo sin implementación: dqn"):
+            unknown = write_config(directory, "unknown.yml", experiments=["q_learning", "ppo"])
+            with self.assertRaisesRegex(ValueError, "Modelo sin implementación: ppo"):
                 run("experiments", "--config", str(unknown))
             empty = write_config(directory, "empty.yml")
             with self.assertRaisesRegex(ValueError, "experiments requiere"):

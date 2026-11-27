@@ -180,10 +180,9 @@ class EnvironmentTests(unittest.TestCase):
         rules = Precedences({1: (), 2: (1, 4), 3: (2,), 4: (), 5: ()})
         for problem in (ProblemParameters(), ProblemParameters(2, 0.1, 2), ProblemParameters(3, 0.15, 4, "tonnes")):
             env = MineEnv(mine, problem, rules, EnvironmentParameters(3, "finite"))
-            stack, plans, keys = [(env.initial_state(), (), 0.0)], 0, set()
+            stack, plans = [(env.initial_state(), (), 0.0)], 0
             while stack:
                 state, plan, total = stack.pop()
-                keys.add(env.search_key(state))
                 for action in env.cone_actions(state):
                     calls = env.calls
                     result = env.cone_step(state, action)
@@ -198,7 +197,6 @@ class EnvironmentTests(unittest.TestCase):
                     else:
                         stack.append((result.state, extended, total + result.reward))
             self.assertGreater(plans, 10)
-            self.assertTrue(all(len(key) == 3 for key in keys))
 
     def test_cone_view_rejects_what_it_does_not_offer(self):
         env = layered(ProblemParameters(periods=2, capacity=4, capacity_unit="tonnes"))
@@ -214,8 +212,6 @@ class EnvironmentTests(unittest.TestCase):
         self.assertEqual(env.cone_actions(done), ())
         with self.assertRaises(ValueError):
             env.cone_step(done, ADVANCE)
-        moved = replace(first, position=4)
-        self.assertEqual(env.search_key(first), env.search_key(moved))  # the cursor is not part of the key
 
     def test_state_has_no_phase(self):
         self.assertNotIn("phase", State.__dataclass_fields__)

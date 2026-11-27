@@ -12,6 +12,8 @@ params:                  # mismo presupuesto y exploración que Q-learning, para
   epsilon_schedule: constant
   transitions: 100000    # presupuesto: pasos REALES por semilla
   policy_rollouts: 20
+  initial_q: zero        # valor inicial de Q: zero = 0 | shared_waste = potencial de estéril repartido
+                         # (src/training/potential.py; equivale a reward shaping por potencial)
   planning_steps: 10     # n: máximo de actualizaciones desde la cola por paso real (0 = Q-learning exacto).
                          # El mismo valor que Dyna-Q, para comparar ambos con igual cómputo máximo.
   theta: 0.001           # prioridad mínima para entrar a la cola, en unidades de VAN. Solo filtra
