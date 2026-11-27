@@ -8,8 +8,8 @@ params:                  # mismo presupuesto y exploración que Q-learning, para
   state: physical        # obligatorio: con position el modelo aprendido mezclaría estados distintos
   alpha: 1.0             # tasa de aprendizaje, en (0, 1]
   gamma: 1.0             # cuanto pesa el valor futuro, en [0, 1]
-  epsilon: 0.5           # azar inicial de la exploración; baja hasta 0 al final del presupuesto
-  epsilon_schedule: linear
+  epsilon: 0.3           # azar inicial de la exploración; baja hasta 0 al final del presupuesto
+  epsilon_schedule: constant
   transitions: 100000    # presupuesto: pasos REALES por semilla (las actualizaciones simuladas no cuentan)
   policy_rollouts: 20    # planes construidos con la política aprendida
   planning_steps: 10     # n: actualizaciones simuladas por paso real (0 = Q-learning exacto).
