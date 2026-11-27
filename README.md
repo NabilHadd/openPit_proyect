@@ -1,13 +1,15 @@
 # openPit_proyect
 
 Planificación de la extracción de una mina a cielo abierto con **Q-learning tabular**
-como línea base, comparado con Dyna-Q, Prioritized Sweeping y Beam Search.
+como línea base, comparado con Dyna-Q, Prioritized Sweeping y DQN.
 El agente recorre el modelo de bloques y decide qué bloques extraer para maximizar el
 VAN del plan, respetando las precedencias del talud. La formulación se basa en
 Quelopana & Navarra (2021).
 
 Estado actual: línea base validada en el caso reducido de 105 bloques entregado por el
-cliente (VAN óptimo de referencia: 336.000).
+cliente (VAN óptimo de referencia: 336.000). En el caso de 495 bloques y 2 períodos
+(referencia del cliente: 705.437) los modelos tabulares no encuentran ningún plan rentable:
+el mineral está bajo estéril y ningún cono es rentable por sí solo.
 
 ## Modelos disponibles
 
@@ -16,12 +18,20 @@ cliente (VAN óptimo de referencia: 336.000).
 | `q_learning` | `src/models/q_learning.py` | Q-learning tabular (línea base): una actualización por paso real | `transitions` (pasos reales) |
 | `dyna_q` | `src/models/dyna_q.py` | Q-learning + modelo aprendido de las transiciones vividas: `planning_steps` actualizaciones simuladas por paso real, con pares sorteados | `transitions`; además `planning_updates` |
 | `prioritized_sweeping` | `src/models/prioritized_sweeping.py` | Como Dyna-Q, pero actualiza primero los pares de mayor \|error TD\| (> `theta`) y propaga hacia sus predecesores | `transitions`; además `planning_updates`, `queue_pushes` |
-| `beam_search` | `src/models/beam_search.py` | Búsqueda directa sin aprendizaje: cada nivel extrae el cono completo de un bloque y conserva los `width` mejores planes según `heuristic` (`npv` u `optimistic`); determinista | `simulator_calls`; además `expansions` |
+| `dqn` | `src/models/dqn.py` | Q-learning con una red neuronal pequeña en vez de la tabla: la red recibe atributos del cono de cada acción, así que generaliza entre bloques; memoria de repetición y red objetivo | `transitions` (acciones de cono); además `updates` (de la red) |
 
-Los tres primeros caminan con el cursor de 6 direcciones y parten del bloque inicial forzado;
-`beam_search` usa la vista por conos del entorno (sin cursor ni inicio forzado), así que su
-conjunto de planes posibles es más amplio. Con `planning_steps: 0`, Dyna-Q y Prioritized
-Sweeping son exactamente Q-learning. Los hiperparámetros de cada uno, con su justificación,
+Los tres tabulares caminan con el cursor de 6 direcciones y parten del bloque inicial forzado
+(réplica de Quelopana & Navarra); `dqn` usa la vista por conos del entorno (cada acción extrae
+el cono completo de un bloque, sin cursor ni inicio forzado), así que sus transiciones no se
+comparan con las de los tabulares. Con `planning_steps: 0`, Dyna-Q y Prioritized Sweeping son
+exactamente Q-learning.
+
+**Potencial de estéril repartido** (`src/training/potential.py`): estimación del valor que
+queda por ganar. Cada bloque de mineral paga el estéril de su cono, pero un estéril que está
+en los conos de varios minerales se reparte en partes iguales entre ellos; el potencial es la
+suma de lo que le queda positivo a cada mineral aún en el suelo. Los tabulares lo usan como
+valor inicial de Q con `initial_q: shared_waste` (equivale a *reward shaping* por potencial,
+Wiewiora 2003); DQN lo usa como atributo. Los hiperparámetros de cada uno, con su justificación,
 están comentados en `configs/<clave>.yml`.
 
 ## Estructura
@@ -35,7 +45,7 @@ están comentados en `configs/<clave>.yml`.
 │   ├── config_settings.py
 │   ├── model_settings.py      # Lector genérico del YAML de cualquier modelo (params + distribuciones)
 │   ├── q_learning.yml         # Hiperparámetros de Q-learning y sus distribuciones (convención: <clave>.yml)
-│   ├── dyna_q.yml, prioritized_sweeping.yml, beam_search.yml
+│   ├── dyna_q.yml, prioritized_sweeping.yml, dqn.yml
 ├── environment.yml            # Entorno conda (Python 3.12)
 ├── data/                      # Datos (no se versionan, salvo los ejemplos)
 │   ├── raw/                   # Archivos de origen (p. ej. el Excel del cliente)
@@ -49,7 +59,7 @@ están comentados en `configs/<clave>.yml`.
 │   │   ├── instance.py        # MineInstance: mina, precedencias, problema y entorno que recibe cada modelo
 │   │   └── precedences.py     # Regla de precedencia del talud
 │   ├── envs/mine_env.py       # Entorno: simulador puro (transition), episodio vivo (reset/step) y vista
-│   │                          # por conos para búsqueda (cone_actions, extract, search_key)
+│   │                          # por conos (cone_actions, extract, cone_step), la que usa DQN
 │   ├── models/
 │   │   ├── base.py            # MineEstimator: contrato común (estimador de scikit-learn, costo y traza)
 │   │   ├── register.py        # @register y REGISTRY: clave -> estimador y dataclass de hiperparámetros;
@@ -58,10 +68,11 @@ están comentados en `configs/<clave>.yml`.
 │   │   ├── q_learning.py      # Q-learning tabular (línea base): TabularQ sin planificación
 │   │   ├── dyna_q.py          # Dyna-Q: TabularQ + modelo aprendido y planificación uniforme
 │   │   ├── prioritized_sweeping.py  # Prioritized sweeping: TabularQ + cola de prioridades
-│   │   ├── beam_search.py     # Beam search sobre la vista por conos (sin aprendizaje)
+│   │   ├── dqn.py             # DQN: red pequeña sobre atributos del cono de cada acción
 │   │   └── exploration.py     # Curvas de epsilon (exploración)
 │   ├── training/
-│   │   └── rewards.py         # Recompensa: VAN incremental de lo extraído
+│   │   ├── rewards.py         # Recompensa: VAN incremental de lo extraído
+│   │   └── potential.py       # Potencial de estéril repartido (initial_q de los tabulares, atributo de DQN)
 │   └── evaluation/
 │       ├── metrics.py         # Verificador independiente de planes (factibilidad y VAN)
 │       ├── reporter.py        # report.json, planes CSV y trazabilidad
@@ -139,14 +150,17 @@ modelo. Una clave desconocida, en cualquiera de los dos, es un error.
 
 | Sección | Parámetros |
 |---|---|
-| `params` | `state` (`physical` \| `position`), `alpha`, `gamma`, `epsilon`, `epsilon_schedule` (`linear` \| `constant`), `transitions` (presupuesto por semilla), `policy_rollouts` (planes construidos con la política aprendida) |
+| `params` | `state` (`physical` \| `position`), `alpha`, `gamma`, `epsilon`, `epsilon_schedule` (`linear` \| `constant`), `transitions` (presupuesto por semilla), `policy_rollouts` (planes construidos con la política aprendida), `initial_q` (`zero` \| `shared_waste`: valor inicial de Q) |
 | `tuning.distributions` | distribución de cada parámetro de `params` a ajustar: `uniform` y `loguniform` (`low`, `high`), `randint` (`low`, `high` enteros, ambos incluidos) o `choice` (`values`); un parámetro entero solo acepta `randint` o `choice`. Los que no aparecen quedan fijos. Se valida al leer el archivo. `transitions` y `policy_rollouts` no se ajustan |
 
 `configs/dyna_q.yml` y `configs/prioritized_sweeping.yml`: los mismos `params` que Q-learning
 (con `state: physical` obligatorio) más `planning_steps` (actualizaciones de planificación por
 paso real; 0 = Q-learning) y, en Prioritized Sweeping, `theta` (prioridad mínima para entrar a
-la cola, en unidades de VAN). `configs/beam_search.yml`: `width` (planes por nivel; 1 = voraz),
-`heuristic` (`npv` \| `optimistic`) y `max_simulator_calls` (tope de seguridad, no se ajusta).
+la cola, en unidades de VAN). `configs/dqn.yml`: `gamma`, `epsilon`, `epsilon_schedule`,
+`transitions` (acciones de cono por semilla) y `policy_rollouts` como los tabulares, más la red
+(`hidden_units`, `hidden_layers`, `learning_rate`) y el entrenamiento (`batch_size`,
+`replay_size`, `warmup` transiciones al azar antes de entrenar, `train_every`, `target_update`
+transiciones entre copias de la red objetivo).
 
 Configuración de referencia: `state: physical`, `horizon: external`, `alpha: 1`, `gamma: 1`,
 `epsilon: 0.5` con `epsilon_schedule: linear`, 100.000 transiciones.

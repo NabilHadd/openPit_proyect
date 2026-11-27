@@ -74,7 +74,7 @@ class Distribution:
     loguniform: uniform over the logarithm in [low, high] (low > 0): every order of
         magnitude is equally likely, for parameters whose scale matters more than the value.
     randint: any integer in [low, high], both included, all equally likely (integer
-        hyperparameters, e.g. planning steps or beam width).
+        hyperparameters, e.g. planning steps or hidden units).
     choice: one of `values`, all equally likely.
 
     Only data: the tuning mode turns it into a sampler, and it can go into report.json.

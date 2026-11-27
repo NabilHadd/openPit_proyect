@@ -9,6 +9,8 @@ params:
   epsilon_schedule: constant  # forma de la bajada (src/models/exploration.py). Por ahora: linear = epsilon·(1 - t/transitions)
   transitions: 100000    # presupuesto total de pasos de entrenamiento por semilla
   policy_rollouts: 20    # planes construidos con la política aprendida.
+  initial_q: zero        # valor inicial de Q: zero = 0 | shared_waste = potencial de estéril repartido
+                         # (src/training/potential.py; equivale a reward shaping por potencial)
 
 tuning:                  # modo tuning por búsqueda aleatoria (aún no implementado)
   distributions:         # parámetros de params a ajustar; los que no aparecen quedan fijos en su valor de params

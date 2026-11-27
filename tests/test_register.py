@@ -38,7 +38,7 @@ class RegisterTests(unittest.TestCase):
 
     def test_unknown_duplicate_and_invalid_registrations_are_errors(self):
         with self.assertRaisesRegex(ValueError, "sin implementación"):
-            load_settings("dqn", "configs/q_learning.yml")
+            load_settings("ppo", "configs/q_learning.yml")
         with self.assertRaisesRegex(ValueError, "dos veces"):
             register("q_learning", params=QLearningParams)(type("Other", (QLearningEstimator,), {}))
         with self.assertRaises(TypeError):
@@ -64,8 +64,8 @@ class RegisterTests(unittest.TestCase):
                 spec("broken_model")
             self.assertIs(spec("q_learning").estimator, QLearningEstimator)
         self.assertEqual(imported, ["src.models.broken_model"])  # q_learning was already registered
-        with self.assertRaisesRegex(ValueError, "no existe src/models/dqn.py"):
-            spec("dqn")
+        with self.assertRaisesRegex(ValueError, "no existe src/models/ppo.py"):
+            spec("ppo")
         with self.assertRaisesRegex(ValueError, "no registra"):
             spec("exploration")  # a module of src/models that registers nothing
         with self.assertRaisesRegex(ValueError, "inválida"):

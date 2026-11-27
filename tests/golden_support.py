@@ -100,10 +100,11 @@ OTHER_MODELS = {"dyna_q": {"planning_steps": 3}, "prioritized_sweeping": {"plann
 def model_fingerprint(key: str, name: str, seed: int) -> dict:
     from src.models.register import spec
     instance, params = cases()[name]
-    if key == "beam_search":
-        model = spec(key).estimator(width=3, random_state=seed).fit(instance)
-        return {"plan": _digest(_plan(model.plan_)), "trace": _digest([[c, v] for c, v in model.trace_]),
-                "counters": model.counters_}
+    if key == "dqn":
+        smoke = spec(key).params.SMOKE
+        model = spec(key).estimator(**smoke, random_state=seed).fit(instance)
+        return {"best": _digest(_plan(model.best_observed_.plan)), "trace": _digest([[c, v] for c, v in model.trace_]),
+                "history": _digest([asdict(e) for e in model.history_]), "counters": model.counters_}
     model = spec(key).estimator(**params, **OTHER_MODELS.get(key, {}), random_state=seed).fit(instance)
     return {**fingerprint(model), "counters": model.counters_}
 

@@ -54,7 +54,8 @@ class PrioritizedSweepingEstimator(TabularQ):
     name = "spatial-cone-prioritized-sweeping"
 
     def __init__(self, state="physical", alpha=1.0, gamma=1.0, epsilon=0.3, epsilon_schedule="constant",
-                 transitions=100_000, policy_rollouts=20, planning_steps=10, theta=0.001, random_state=0):
+                 transitions=100_000, policy_rollouts=20, planning_steps=10, theta=0.001,
+                 initial_q="zero", random_state=0):
         self.state = state
         self.alpha = alpha
         self.gamma = gamma
@@ -62,6 +63,7 @@ class PrioritizedSweepingEstimator(TabularQ):
         self.epsilon_schedule = epsilon_schedule
         self.transitions = transitions
         self.policy_rollouts = policy_rollouts
+        self.initial_q = initial_q
         self.planning_steps = planning_steps
         self.theta = theta
         self.random_state = random_state

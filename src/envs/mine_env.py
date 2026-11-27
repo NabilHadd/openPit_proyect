@@ -11,9 +11,9 @@ Two ways to use it:
   never change the environment; transition only counts its calls in `calls`.
 - Live episode, as a thin wrapper of the simulator: reset() and step(action) keep the
   current state, the plan built so far, the actions taken and why the episode ended.
-- Cone view, for search methods (beam search): cone_actions(state), extract(state, block)
-  and cone_step(state, action), pure as well, with no cursor and no step clock; they share
-  the core of transition (reward, capacity, end). search_key(state) deduplicates nodes.
+- Cone view, for models that choose whole cones (DQN): cone_actions(state), extract(state,
+  block) and cone_step(state, action), pure as well, with no cursor and no step clock; they
+  share the core of transition (reward, capacity, end).
 
 `calls` counts simulated transitions (transition, extract, cone_step, step included), not
 the calls to actions() or cone_actions(), which also cost time.
@@ -163,7 +163,7 @@ class MineEnv:
     # --- cone view (search) ---------------------------------------------------------------
 
     def cone_actions(self, state: State) -> tuple[int | str, ...]:
-        """Cone view, for search methods: every reachable pending block whose pending cone
+        """Cone view, for models that choose whole cones: every reachable pending block whose pending cone
         fits the capacity left (in the global valid order), then ADVANCE and STOP. There is
         no cursor and no forced start: any cone can be the first one."""
         if state.terminal:
@@ -176,7 +176,7 @@ class MineEnv:
     def extract(self, state: State, block: int) -> Step:
         """Cone view: extract the pending cone of block in the current period. Pure, counts
         one call. The step clock does not run (it is a rule of the cursor walk), so the only
-        ends are STOP and all_extracted. position becomes block, but search_key ignores it."""
+        ends are STOP and all_extracted. position becomes block."""
         if state.terminal:
             raise ValueError("El estado es terminal")
         if block not in self.blocks or not self.blocks[block].reachable or block in state.extracted:
@@ -192,14 +192,6 @@ class MineEnv:
                 raise ValueError(f"Acción no disponible: {action!r}")
             return self._apply(state, action, state.position, tick=False)
         return self.extract(state, action)
-
-    @staticmethod
-    def search_key(state: State) -> tuple:
-        """Key to deduplicate search nodes: what decides the future (extracted, period and
-        capacity used), without the cursor position or the step clock. used is rounded so
-        the same blocks summed in another order give the same key. Two nodes with the same
-        key can carry plans of different VAN (blocks in other periods): keep the best."""
-        return state.extracted, state.period, round(state.used, 9)
 
     # --- live episode ---------------------------------------------------------------------
 

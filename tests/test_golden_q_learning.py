@@ -38,7 +38,7 @@ class GoldenQLearningTests(unittest.TestCase):
         """str hashes change per process (PYTHONHASHSEED); iterating a set of actions would
         make a seed irreproducible across runs. A single process never notices it. Checked
         for every model whose fit could iterate hashed containers."""
-        for model in ("q_learning", "dyna_q", "prioritized_sweeping", "beam_search"):
+        for model in ("q_learning", "dyna_q", "prioritized_sweeping", "dqn"):
             outputs = []
             for hash_seed in ("1", "2"):
                 env = {**os.environ, "PYTHONHASHSEED": hash_seed,

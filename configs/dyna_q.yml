@@ -12,6 +12,8 @@ params:                  # mismo presupuesto y exploración que Q-learning, para
   epsilon_schedule: constant
   transitions: 100000    # presupuesto: pasos REALES por semilla (las actualizaciones simuladas no cuentan)
   policy_rollouts: 20    # planes construidos con la política aprendida
+  initial_q: zero        # valor inicial de Q: zero = 0 | shared_waste = potencial de estéril repartido
+                         # (src/training/potential.py; equivale a reward shaping por potencial)
   planning_steps: 10     # n: actualizaciones simuladas por paso real (0 = Q-learning exacto).
                          # 10 multiplica por 11 las actualizaciones de Q (1,1 millones por semilla):
                          # suficiente para propagar valor hacia atrás sin que el tiempo explote.

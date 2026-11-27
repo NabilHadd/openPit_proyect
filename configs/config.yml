@@ -22,8 +22,8 @@ environment:             # Cómo MineEnv presenta el problema a los modelos que 
                          # finite: max_steps es regla de la tarea y los pasos restantes son parte del estado
 
 train: q_learning        # modelo del modo train (su YAML: configs/q_learning.yml)
-experiments: [prioritized_sweeping, dyna_q, beam_search, q_learning]  # modelos del modo experiments, todos con las
-                           # mismas seeds (un modelo determinista, como beam_search, corre solo con la primera)
+experiments: [q_learning, dyna_q, prioritized_sweeping, dqn]  # modelos del modo experiments, todos con las
+                           # mismas seeds (un modelo determinista correría solo con la primera)
 
 tuning:                  # modo tuning por búsqueda aleatoria (aún no implementado); igual para todos los modelos
   n_iter: 20             # configuraciones sorteadas desde las distribuciones del YAML del modelo
